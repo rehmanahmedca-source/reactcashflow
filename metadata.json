@@ -1,0 +1,6 @@
+{
+  "name": "FBM Cash Flow Systems",
+  "description": "Modular financial control, cash & bank ledger, tracking, daily reconciliation, and PDF/report export system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
