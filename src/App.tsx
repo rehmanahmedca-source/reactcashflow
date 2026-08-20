@@ -96,6 +96,15 @@ export default function App() {
   useEffect(() => {
     document.title = "FBM Cash Flow Systems";
     fetchAllData();
+
+    // Real-time synchronization across all devices and active browser sessions
+    const unsubscribe = api.subscribeToData(() => {
+      fetchAllData();
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const totalCash = accounts

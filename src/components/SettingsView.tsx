@@ -76,11 +76,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleExportJsonBackup = () => {
+  const handleExportJsonBackup = async () => {
     setExportJsonLoading(true);
     setBackupMessage(null);
     try {
-      const blob = api.exportFullBackupJson();
+      const blob = await api.exportFullBackupJson();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
