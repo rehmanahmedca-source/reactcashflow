@@ -18,7 +18,8 @@ import {
   CheckCircle2,
   RefreshCw,
   HardDrive,
-  FileCode
+  FileCode,
+  Trash2
 } from 'lucide-react';
 import { FinancialAccount } from '../types';
 import { api } from '../services/apiClient';
@@ -36,11 +37,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   auditLogCount,
   onRefreshData
 }) => {
-  const [wipeMode, setWipeMode] = useState<'TRANSACTIONS_ONLY' | 'FULL_SYSTEM_RESET'>('TRANSACTIONS_ONLY');
+  const [wipeMode, setWipeMode] = useState<'TRANSACTIONS_ONLY_ZERO_BALANCES' | 'TRANSACTIONS_ONLY' | 'FULL_SYSTEM_RESET' | 'PURGE_ALL_DATA_BLANK'>('TRANSACTIONS_ONLY_ZERO_BALANCES');
   const [wipeConfirmText, setWipeConfirmText] = useState('');
   const [wipeLoading, setWipeLoading] = useState(false);
   const [wipeError, setWipeError] = useState('');
   const [wipeSuccess, setWipeSuccess] = useState('');
+
+  const getRequiredConfirmText = (mode: string) => {
+    if (mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES') return 'CLEAR';
+    if (mode === 'TRANSACTIONS_ONLY') return 'RESET LEDGER';
+    if (mode === 'PURGE_ALL_DATA_BLANK') return 'PURGE';
+    return 'WIPE OUT';
+  };
 
   // Backup & Restore State
   const [exportLoading, setExportLoading] = useState(false);
@@ -127,7 +135,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setWipeError('');
     setWipeSuccess('');
 
-    const requiredText = wipeMode === 'TRANSACTIONS_ONLY' ? 'CLEAR' : 'WIPE OUT';
+    const requiredText = getRequiredConfirmText(wipeMode);
     if (wipeConfirmText.trim().toUpperCase() !== requiredText) {
       setWipeError(`Please type "${requiredText}" in uppercase to confirm clearance.`);
       return;
@@ -425,7 +433,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div>
             <label className="block font-bold text-slate-900 mb-2 text-xs">Select Clearance Scope *</label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {/* Option 1: Clear all transactions and reset balances to Rs. 0 */}
+              <button
+                type="button"
+                onClick={() => {
+                  setWipeMode('TRANSACTIONS_ONLY_ZERO_BALANCES');
+                  setWipeConfirmText('');
+                  setWipeError('');
+                  setWipeSuccess('');
+                }}
+                className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${
+                  wipeMode === 'TRANSACTIONS_ONLY_ZERO_BALANCES'
+                    ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/20 text-rose-950 font-bold shadow-xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-rose-700">
+                    <RotateCcw className="w-4 h-4" /> Clear All Transactions (Reset to Rs. 0)
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-200/80 text-rose-900 font-mono font-bold">CLEAR</span>
+                </div>
+                <p className="text-[11px] text-slate-600 font-normal leading-relaxed">
+                  Deletes all posted transactions, reconciliation counts & closures. Sets all account balances and entity ledgers to <strong>Rs. 0.00</strong>. Master accounts & categories are kept.
+                </p>
+              </button>
+
+              {/* Option 2: Clear all transactions but keep designated opening balances */}
               <button
                 type="button"
                 onClick={() => {
@@ -436,18 +471,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 }}
                 className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${
                   wipeMode === 'TRANSACTIONS_ONLY'
-                    ? 'bg-rose-50 border-rose-500 ring-2 ring-rose-500/20 text-rose-950 font-bold shadow-xs'
+                    ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20 text-amber-950 font-bold shadow-xs'
                     : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs font-extrabold text-rose-700 mb-1.5">
-                  <RotateCcw className="w-4 h-4" /> Clear All Ledger Transactions
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-amber-800">
+                    <RotateCcw className="w-4 h-4" /> Clear Transactions (Keep Opening Balances)
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200/80 text-amber-900 font-mono font-bold">RESET LEDGER</span>
                 </div>
                 <p className="text-[11px] text-slate-600 font-normal leading-relaxed">
-                  Clears all posted transactions, daily reconciliation counts & closing sessions. Resets account current balances back to opening balances. Keeps master banks, accounts, clients & suppliers intact.
+                  Deletes all transactions and restores each account balance strictly back to its pre-configured opening balance.
                 </p>
               </button>
 
+              {/* Option 3: Full Factory Reset with 0 balance */}
               <button
                 type="button"
                 onClick={() => {
@@ -462,11 +501,40 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                 }`}
               >
-                <div className="flex items-center gap-2 text-xs font-extrabold text-rose-800 mb-1.5">
-                  <Flame className="w-4 h-4 text-rose-600" /> Full Factory Reset
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-rose-800">
+                    <Flame className="w-4 h-4 text-rose-600" /> Full Factory Reset (Rs. 0 Slate)
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-300 text-rose-950 font-mono font-bold">WIPE OUT</span>
                 </div>
                 <p className="text-[11px] text-slate-600 font-normal leading-relaxed">
-                  Complete system clearance. Removes all transactions, reconciliations, categories, accounts, banks, clients, suppliers, partners, workers, vehicles, payment methods, and resets all system data.
+                  Restores clean initial banks, accounts and categories with <strong>Rs. 0 initial balances</strong>. Removes all transactions, clients, suppliers, workers and vehicles.
+                </p>
+              </button>
+
+              {/* Option 4: Complete Purge to Blank Database */}
+              <button
+                type="button"
+                onClick={() => {
+                  setWipeMode('PURGE_ALL_DATA_BLANK');
+                  setWipeConfirmText('');
+                  setWipeError('');
+                  setWipeSuccess('');
+                }}
+                className={`p-4 rounded-xl border text-left cursor-pointer transition-all ${
+                  wipeMode === 'PURGE_ALL_DATA_BLANK'
+                    ? 'bg-red-100 border-red-700 ring-2 ring-red-700/40 text-red-950 font-bold shadow-xs'
+                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-xs font-extrabold text-red-900">
+                    <Trash2 className="w-4 h-4 text-red-700" /> Total Database Purge (Blank State)
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-300 text-red-950 font-mono font-bold">PURGE</span>
+                </div>
+                <p className="text-[11px] text-slate-600 font-normal leading-relaxed">
+                  Deletes all cloud database collections completely (all accounts, banks, categories, transactions), leaving a 100% empty canvas to build custom structures.
                 </p>
               </button>
             </div>
@@ -475,19 +543,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 leading-relaxed flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
-              <strong>Security Warning:</strong> Performing a data clearance action is immediate and irreversible. An immutable security audit event will be recorded in the system audit stream.
+              <strong>Security Warning:</strong> Performing a data clearance action is immediate and irreversible. All connected devices and user sessions will sync instantly to the cleared state.
             </div>
           </div>
 
           <div className="pt-2 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
             <div>
               <label className="block font-bold text-slate-800 mb-1.5 text-xs">
-                Type <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-rose-700 border border-slate-200 font-extrabold">{wipeMode === 'TRANSACTIONS_ONLY' ? 'CLEAR' : 'WIPE OUT'}</span> to confirm clearance:
+                Type <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-rose-700 border border-slate-200 font-extrabold">{getRequiredConfirmText(wipeMode)}</span> to confirm clearance:
               </label>
               <input
                 type="text"
                 required
-                placeholder={`Type ${wipeMode === 'TRANSACTIONS_ONLY' ? 'CLEAR' : 'WIPE OUT'} here...`}
+                placeholder={`Type ${getRequiredConfirmText(wipeMode)} here...`}
                 value={wipeConfirmText}
                 onChange={e => setWipeConfirmText(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-rose-500 focus:border-rose-500 uppercase tracking-wider font-bold"
@@ -497,11 +565,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={wipeLoading || wipeConfirmText.trim().toUpperCase() !== (wipeMode === 'TRANSACTIONS_ONLY' ? 'CLEAR' : 'WIPE OUT')}
+                disabled={wipeLoading || wipeConfirmText.trim().toUpperCase() !== getRequiredConfirmText(wipeMode)}
                 className="w-full sm:w-auto px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-xl shadow-md cursor-pointer disabled:opacity-40 flex items-center justify-center gap-2 transition-all"
               >
                 <Flame className="w-4 h-4" />
-                {wipeLoading ? 'Processing Clearance...' : wipeMode === 'TRANSACTIONS_ONLY' ? 'Clear All Transactions' : 'Execute Full System Reset'}
+                {wipeLoading ? 'Processing Clearance...' : `Execute ${getRequiredConfirmText(wipeMode)}`}
               </button>
             </div>
           </div>

@@ -55,10 +55,10 @@ const DEFAULT_BANKS: Bank[] = [
 ];
 
 const DEFAULT_ACCOUNTS: FinancialAccount[] = [
-  { id: 'ACC-1', name: 'FBM CASH IN HAND', accountType: 'CASH', openingBalance: 12620, currentBalance: 12620, active: true, displayOrder: 1, createdAt: '2026-08-08' },
-  { id: 'ACC-2', name: 'FBM AL HABIB', bankId: 'BANK-1', bankName: 'BANK AL HABIB', accountNumber: '-', accountType: 'BANK', openingBalance: 474, currentBalance: 474, active: true, displayOrder: 2, createdAt: '2026-08-08' },
-  { id: 'ACC-3', name: 'FBM MCB', bankId: 'BANK-2', bankName: 'MUSLIM COMMERCIAL BANK', accountNumber: '-', accountType: 'BANK', openingBalance: 80038, currentBalance: 80038, active: true, displayOrder: 3, createdAt: '2026-08-08' },
-  { id: 'ACC-4', name: 'FBM JAZZ CASH', bankId: 'BANK-1', bankName: 'BANK AL HABIB', accountNumber: '-', accountType: 'BANK', openingBalance: 125, currentBalance: 125, active: true, displayOrder: 4, createdAt: '2026-08-08' }
+  { id: 'ACC-1', name: 'FBM CASH IN HAND', accountType: 'CASH', openingBalance: 0, currentBalance: 0, active: true, displayOrder: 1, createdAt: '2026-08-08' },
+  { id: 'ACC-2', name: 'FBM AL HABIB', bankId: 'BANK-1', bankName: 'BANK AL HABIB', accountNumber: '-', accountType: 'BANK', openingBalance: 0, currentBalance: 0, active: true, displayOrder: 2, createdAt: '2026-08-08' },
+  { id: 'ACC-3', name: 'FBM MCB', bankId: 'BANK-2', bankName: 'MUSLIM COMMERCIAL BANK', accountNumber: '-', accountType: 'BANK', openingBalance: 0, currentBalance: 0, active: true, displayOrder: 3, createdAt: '2026-08-08' },
+  { id: 'ACC-4', name: 'FBM JAZZ CASH', bankId: 'BANK-1', bankName: 'BANK AL HABIB', accountNumber: '-', accountType: 'BANK', openingBalance: 0, currentBalance: 0, active: true, displayOrder: 4, createdAt: '2026-08-08' }
 ];
 
 const DEFAULT_CATEGORIES: TransactionCategory[] = [
@@ -145,6 +145,26 @@ async function ensureFirestoreInitialized(): Promise<void> {
   return initPromise;
 }
 
+// Helper to strip undefined values so Firestore never throws unsupported field errors
+function sanitizeForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as any;
+  }
+  if (Array.isArray(data)) {
+    return data.map(item => sanitizeForFirestore(item)) as any;
+  }
+  if (typeof data === 'object' && !(data instanceof Date)) {
+    const result: Record<string, any> = {};
+    for (const [key, val] of Object.entries(data)) {
+      if (val !== undefined) {
+        result[key] = sanitizeForFirestore(val);
+      }
+    }
+    return result as T;
+  }
+  return data;
+}
+
 // Audit helper in Firestore
 async function addFirestoreAudit(action: string, entityType: string, entityId: string, details: string, user: string = 'User') {
   try {
@@ -158,25 +178,46 @@ async function addFirestoreAudit(action: string, entityType: string, entityId: s
       details,
       user: user || 'System'
     };
-    await setDoc(doc(db, COL_AUDIT_LOGS, logId), newLog);
+    await setDoc(doc(db, COL_AUDIT_LOGS, logId), sanitizeForFirestore(newLog));
   } catch (err) {
     console.error('Failed to log audit:', err);
   }
 }
 
 export const api = {
-  // Real-time synchronization subscription helper
+  // Real-time synchronization subscription helper across all master and transactional collections
   subscribeToData(onUpdate: () => void) {
-    const unsubTxns = onSnapshot(collection(db, COL_TRANSACTIONS), () => onUpdate());
-    const unsubAccounts = onSnapshot(collection(db, COL_ACCOUNTS), () => onUpdate());
-    const unsubRecon = onSnapshot(collection(db, COL_DAILY_POSITIONS), () => onUpdate());
-    const unsubSessions = onSnapshot(collection(db, COL_CLOSING_SESSIONS), () => onUpdate());
+    const collectionsToListen = [
+      COL_TRANSACTIONS,
+      COL_ACCOUNTS,
+      COL_BANKS,
+      COL_CATEGORIES,
+      COL_CLIENTS,
+      COL_SUPPLIERS,
+      COL_PARTNERS,
+      COL_WORKERS,
+      COL_VEHICLES,
+      COL_PAYMENT_METHODS,
+      COL_DAILY_POSITIONS,
+      COL_CLOSING_SESSIONS,
+      COL_AUDIT_LOGS,
+      COL_META
+    ];
+
+    const unsubs = collectionsToListen.map(colName =>
+      onSnapshot(
+        collection(db, colName),
+        () => {
+          onUpdate();
+        },
+        (error) => {
+          console.warn(`Snapshot listener notice for ${colName}:`, error);
+        }
+      )
+    );
 
     return () => {
-      unsubTxns();
-      unsubAccounts();
-      unsubRecon();
-      unsubSessions();
+      unsubs.forEach(u => u());
     };
   },
 
@@ -200,7 +241,7 @@ export const api = {
       active: data.active !== undefined ? data.active : true,
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_BANKS, newId), newBank);
+    await setDoc(doc(db, COL_BANKS, newId), sanitizeForFirestore(newBank));
     await addFirestoreAudit('CREATE_BANK', 'BANK', newId, `Created bank ${newBank.name}`, user);
     return newBank;
   },
@@ -217,7 +258,7 @@ export const api = {
       code: data.code ? data.code.toUpperCase().trim() : existing.code,
       name: data.name ? data.name.trim() : existing.name
     };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_BANK', 'BANK', id, `Updated bank ${updated.name}`, user);
     return updated;
   },
@@ -260,7 +301,7 @@ export const api = {
       displayOrder: allAccs.length + 1,
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_ACCOUNTS, newId), newAcc);
+    await setDoc(doc(db, COL_ACCOUNTS, newId), sanitizeForFirestore(newAcc));
     await addFirestoreAudit('CREATE_ACCOUNT', 'ACCOUNT', newId, `Created account ${newAcc.name} (Opening: Rs. ${openBal})`, user);
     return newAcc;
   },
@@ -276,7 +317,7 @@ export const api = {
       ...data,
       name: data.name ? data.name.trim() : existing.name
     };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_ACCOUNT', 'ACCOUNT', id, `Updated account ${updated.name}`, user);
     return updated;
   },
@@ -319,7 +360,7 @@ export const api = {
       requiresDescription: data.requiresDescription,
       description: data.description?.trim()
     };
-    await setDoc(doc(db, COL_CATEGORIES, newId), newCat);
+    await setDoc(doc(db, COL_CATEGORIES, newId), sanitizeForFirestore(newCat));
     await addFirestoreAudit('CREATE_CATEGORY', 'CATEGORY', newId, `Created category ${newCat.name}`, user);
     return newCat;
   },
@@ -331,7 +372,7 @@ export const api = {
     if (!snap.exists()) throw new Error('Category not found');
     const existing = snap.data() as TransactionCategory;
     const updated = { ...existing, ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_CATEGORY', 'CATEGORY', id, `Updated category ${updated.name}`, user);
     return updated;
   },
@@ -371,7 +412,7 @@ export const api = {
       status: data.status || 'ACTIVE',
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_CLIENTS, newId), newCli);
+    await setDoc(doc(db, COL_CLIENTS, newId), sanitizeForFirestore(newCli));
     await addFirestoreAudit('CREATE_CLIENT', 'CLIENT', newId, `Created client ${newCli.name}`, user);
     return newCli;
   },
@@ -382,7 +423,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Client not found');
     const updated = { ...(snap.data() as Client), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_CLIENT', 'CLIENT', id, `Updated client ${updated.name}`, user);
     return updated;
   },
@@ -422,7 +463,7 @@ export const api = {
       status: data.status || 'ACTIVE',
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_SUPPLIERS, newId), newSup);
+    await setDoc(doc(db, COL_SUPPLIERS, newId), sanitizeForFirestore(newSup));
     await addFirestoreAudit('CREATE_SUPPLIER', 'SUPPLIER', newId, `Created supplier ${newSup.name}`, user);
     return newSup;
   },
@@ -433,7 +474,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Supplier not found');
     const updated = { ...(snap.data() as Supplier), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_SUPPLIER', 'SUPPLIER', id, `Updated supplier ${updated.name}`, user);
     return updated;
   },
@@ -473,7 +514,7 @@ export const api = {
       status: data.status || 'ACTIVE',
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_PARTNERS, newId), newPtr);
+    await setDoc(doc(db, COL_PARTNERS, newId), sanitizeForFirestore(newPtr));
     await addFirestoreAudit('CREATE_PARTNER', 'PARTNER', newId, `Created partner ${newPtr.name}`, user);
     return newPtr;
   },
@@ -484,7 +525,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Partner not found');
     const updated = { ...(snap.data() as Partner), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_PARTNER', 'PARTNER', id, `Updated partner ${updated.name}`, user);
     return updated;
   },
@@ -523,7 +564,7 @@ export const api = {
       status: data.status || 'ACTIVE',
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_WORKERS, newId), newWrk);
+    await setDoc(doc(db, COL_WORKERS, newId), sanitizeForFirestore(newWrk));
     await addFirestoreAudit('CREATE_WORKER', 'WORKER', newId, `Created worker ${newWrk.name}`, user);
     return newWrk;
   },
@@ -534,7 +575,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Worker not found');
     const updated = { ...(snap.data() as Worker), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_WORKER', 'WORKER', id, `Updated worker ${updated.name}`, user);
     return updated;
   },
@@ -570,7 +611,7 @@ export const api = {
       status: data.status || 'ACTIVE',
       createdAt: new Date().toISOString().slice(0, 10)
     };
-    await setDoc(doc(db, COL_VEHICLES, newId), newVeh);
+    await setDoc(doc(db, COL_VEHICLES, newId), sanitizeForFirestore(newVeh));
     await addFirestoreAudit('CREATE_VEHICLE', 'VEHICLE', newId, `Created vehicle ${newVeh.plateNumber}`, user);
     return newVeh;
   },
@@ -581,7 +622,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Vehicle not found');
     const updated = { ...(snap.data() as Vehicle), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_VEHICLE', 'VEHICLE', id, `Updated vehicle ${updated.plateNumber}`, user);
     return updated;
   },
@@ -615,7 +656,7 @@ export const api = {
       code: (data.code || data.name || '').toUpperCase().replace(/\s+/g, '_'),
       active: data.active !== undefined ? data.active : true
     };
-    await setDoc(doc(db, COL_PAYMENT_METHODS, newId), newPm);
+    await setDoc(doc(db, COL_PAYMENT_METHODS, newId), sanitizeForFirestore(newPm));
     await addFirestoreAudit('CREATE_PAYMENT_METHOD', 'PAYMENT_METHOD', newId, `Created payment method ${newPm.name}`, user);
     return newPm;
   },
@@ -626,7 +667,7 @@ export const api = {
     const snap = await getDoc(docRef);
     if (!snap.exists()) throw new Error('Payment Method not found');
     const updated = { ...(snap.data() as PaymentMethod), ...data };
-    await setDoc(docRef, updated);
+    await setDoc(docRef, sanitizeForFirestore(updated));
     await addFirestoreAudit('UPDATE_PAYMENT_METHOD', 'PAYMENT_METHOD', id, `Updated payment method ${updated.name}`, user);
     return updated;
   },
@@ -667,6 +708,7 @@ export const api = {
     let targetDocRef = null;
 
     if (isTransfer) {
+      if (!data.targetAccountId) throw new Error('Destination Transfer Account is required for transfer');
       targetDocRef = doc(db, COL_ACCOUNTS, data.targetAccountId);
       const targetSnap = await getDoc(targetDocRef);
       if (!targetSnap.exists()) throw new Error('Destination Transfer Account not found');
@@ -681,6 +723,42 @@ export const api = {
     }
     if (!categoryName) categoryName = isTransfer ? 'ACCOUNT TRANSFER' : 'GENERAL';
 
+    // Entity name resolution if entityId is supplied
+    let entityName = data.entityName;
+    if (data.entityType && data.entityType !== 'NONE' && data.entityId && !entityName) {
+      try {
+        if (data.entityType === 'CLIENT') {
+          const snap = await getDoc(doc(db, COL_CLIENTS, data.entityId));
+          if (snap.exists()) entityName = (snap.data() as Client).name;
+        } else if (data.entityType === 'SUPPLIER') {
+          const snap = await getDoc(doc(db, COL_SUPPLIERS, data.entityId));
+          if (snap.exists()) entityName = (snap.data() as Supplier).name;
+        } else if (data.entityType === 'PARTNER') {
+          const snap = await getDoc(doc(db, COL_PARTNERS, data.entityId));
+          if (snap.exists()) entityName = (snap.data() as Partner).name;
+        } else if (data.entityType === 'WORKER') {
+          const snap = await getDoc(doc(db, COL_WORKERS, data.entityId));
+          if (snap.exists()) entityName = (snap.data() as Worker).name;
+        }
+      } catch (e) {
+        console.warn('Entity lookup error:', e);
+      }
+    }
+
+    // Vehicle info resolution
+    let vehicleInfo = data.vehicleInfo;
+    if (data.vehicleId && !vehicleInfo) {
+      try {
+        const snap = await getDoc(doc(db, COL_VEHICLES, data.vehicleId));
+        if (snap.exists()) {
+          const v = snap.data() as Vehicle;
+          vehicleInfo = `${v.plateNumber} (${v.model})`;
+        }
+      } catch (e) {
+        console.warn('Vehicle lookup error:', e);
+      }
+    }
+
     const txns = await this.getTransactions();
     const txnId = `TXN-${(txns.length + 10001).toString()}`;
     const now = new Date();
@@ -692,21 +770,20 @@ export const api = {
       direction: data.direction,
       accountId: account.id,
       accountName: account.name,
-      targetAccountId: targetAccount?.id,
-      targetAccountName: targetAccount?.name,
+      ...(isTransfer && targetAccount ? { targetAccountId: targetAccount.id, targetAccountName: targetAccount.name } : {}),
       categoryId: data.categoryId || 'CAT-GEN',
       categoryName,
       amount,
       paymentMethod: data.paymentMethod || 'Cash',
-      entityType: data.entityType || 'NONE',
-      entityId: data.entityId,
-      entityName: data.entityName,
-      vehicleId: data.vehicleId,
-      vehicleInfo: data.vehicleInfo,
-      referenceNumber: data.referenceNumber,
+      entityType: isTransfer ? 'NONE' : (data.entityType || 'NONE'),
+      ...(data.entityId ? { entityId: data.entityId } : {}),
+      ...(entityName ? { entityName } : {}),
+      ...(data.vehicleId ? { vehicleId: data.vehicleId } : {}),
+      ...(vehicleInfo ? { vehicleInfo } : {}),
+      ...(data.referenceNumber ? { referenceNumber: data.referenceNumber } : {}),
       sourceModule: data.sourceModule || 'MANUAL',
       description: data.description || '',
-      attachmentUrl: data.attachmentUrl,
+      ...(data.attachmentUrl ? { attachmentUrl: data.attachmentUrl } : {}),
       status: 'POSTED',
       createdBy: user,
       createdAt: now.toISOString()
@@ -714,7 +791,7 @@ export const api = {
 
     // Prepare batch write
     const batch = writeBatch(db);
-    batch.set(doc(db, COL_TRANSACTIONS, txnId), newTxn);
+    batch.set(doc(db, COL_TRANSACTIONS, txnId), sanitizeForFirestore(newTxn));
 
     // Update account balances
     if (data.direction === 'IN') {
@@ -742,6 +819,14 @@ export const api = {
         const sup = supSnap.data() as Supplier;
         const newBal = data.direction === 'OUT' ? (sup.balance || 0) - amount : (sup.balance || 0) + amount;
         batch.update(supRef, { balance: newBal });
+      }
+    } else if (data.entityType === 'PARTNER' && data.entityId) {
+      const ptrRef = doc(db, COL_PARTNERS, data.entityId);
+      const ptrSnap = await getDoc(ptrRef);
+      if (ptrSnap.exists()) {
+        const ptr = ptrSnap.data() as Partner;
+        const newBal = data.direction === 'IN' ? (ptr.balance || 0) + amount : (ptr.balance || 0) - amount;
+        batch.update(ptrRef, { balance: newBal });
       }
     }
 
@@ -783,7 +868,7 @@ export const api = {
 
     // Prepare updated record
     const updatedTxn: LedgerTransaction = { ...txn, ...data };
-    batch.set(txnRef, updatedTxn);
+    batch.set(txnRef, sanitizeForFirestore(updatedTxn));
 
     // Apply new effect if still POSTED
     if (updatedTxn.status === 'POSTED') {
@@ -883,7 +968,7 @@ export const api = {
       status: 'VOIDED',
       voidReason: reason
     };
-    batch.set(txnRef, updatedTxn);
+    batch.set(txnRef, sanitizeForFirestore(updatedTxn));
     await batch.commit();
     await addFirestoreAudit('VOID_TRANSACTION', 'TRANSACTION', id, `Voided transaction ${id}. Reason: ${reason}`, user);
     return updatedTxn;
@@ -1057,7 +1142,7 @@ export const api = {
       notes: notes !== undefined ? notes : (snap.exists() ? (snap.data() as DailyAccountPosition).notes : undefined)
     };
 
-    await setDoc(posDocRef, dataToSave);
+    await setDoc(posDocRef, sanitizeForFirestore(dataToSave));
     await addFirestoreAudit('UPDATE_COUNT', 'RECONCILIATION', posId, `Count updated for ${dataToSave.accountName} on ${date}: Rs. ${actualCountedBalance}`, user);
     return { success: true };
   },
@@ -1104,9 +1189,9 @@ export const api = {
       totalDifference: 0,
       closedBy: user,
       closedAt: new Date().toISOString(),
-      notes
+      ...(notes ? { notes } : {})
     };
-    await setDoc(sessionDocRef, session);
+    await setDoc(sessionDocRef, sanitizeForFirestore(session));
     await addFirestoreAudit('CLOSE_DAY', 'DAY_CLOSING', date, `Permanently closed financial day ${date}`, user);
     return session;
   },
@@ -1119,7 +1204,7 @@ export const api = {
     const session = sessionSnap.data() as DailyClosingSession;
     session.status = 'OPEN';
     session.notes = `Reopened: ${reason}`;
-    await setDoc(sessionDocRef, session);
+    await setDoc(sessionDocRef, sanitizeForFirestore(session));
     await addFirestoreAudit('REOPEN_DAY', 'DAY_CLOSING', date, `Reopened financial day ${date}. Reason: ${reason}`, user);
     return session;
   },
@@ -1134,18 +1219,27 @@ export const api = {
   },
 
   // --- ADMIN PERMANENT DATA WIPE ---
-  async wipeData(mode: 'TRANSACTIONS_ONLY' | 'FULL_SYSTEM_RESET', user: string = 'System Administrator'): Promise<{ success: boolean; message: string }> {
+  async wipeData(
+    mode: 'TRANSACTIONS_ONLY' | 'TRANSACTIONS_ONLY_ZERO_BALANCES' | 'FULL_SYSTEM_RESET' | 'PURGE_ALL_DATA_BLANK',
+    user: string = 'System Administrator'
+  ): Promise<{ success: boolean; message: string }> {
     await ensureFirestoreInitialized();
 
-    // Helper to delete all docs in a collection
+    // Safe chunked batch deletion to prevent Firestore 500-operation limits
     const deleteEntireCollection = async (colName: string) => {
       const snap = await getDocs(collection(db, colName));
-      const batch = writeBatch(db);
-      snap.forEach(docSnap => batch.delete(docSnap.ref));
-      await batch.commit();
+      if (snap.empty) return;
+      const docs = snap.docs;
+      const chunkSize = 200;
+      for (let i = 0; i < docs.length; i += chunkSize) {
+        const chunk = docs.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+        chunk.forEach(docSnap => batch.delete(docSnap.ref));
+        await batch.commit();
+      }
     };
 
-    if (mode === 'TRANSACTIONS_ONLY') {
+    if (mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES' || mode === 'TRANSACTIONS_ONLY') {
       // 1. Delete all transactions
       await deleteEntireCollection(COL_TRANSACTIONS);
       // 2. Delete all daily positions
@@ -1153,30 +1247,56 @@ export const api = {
       // 3. Delete all closing sessions
       await deleteEntireCollection(COL_CLOSING_SESSIONS);
 
-      // 4. Reset account balances to opening balances
+      // 4. Update account balances
       const accSnap = await getDocs(collection(db, COL_ACCOUNTS));
-      const accBatch = writeBatch(db);
-      accSnap.forEach(d => {
-        const acc = d.data() as FinancialAccount;
-        accBatch.update(d.ref, { currentBalance: acc.openingBalance || 0 });
-      });
-      await accBatch.commit();
+      if (!accSnap.empty) {
+        const accBatch = writeBatch(db);
+        accSnap.forEach(d => {
+          const acc = d.data() as FinancialAccount;
+          if (mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES') {
+            accBatch.update(d.ref, { openingBalance: 0, currentBalance: 0 });
+          } else {
+            accBatch.update(d.ref, { currentBalance: acc.openingBalance || 0 });
+          }
+        });
+        await accBatch.commit();
+      }
 
       // 5. Reset client and supplier balances
       const cliSnap = await getDocs(collection(db, COL_CLIENTS));
-      const cliBatch = writeBatch(db);
-      cliSnap.forEach(d => cliBatch.update(d.ref, { balance: 0 }));
-      await cliBatch.commit();
+      if (!cliSnap.empty) {
+        const cliBatch = writeBatch(db);
+        cliSnap.forEach(d => cliBatch.update(d.ref, { balance: 0 }));
+        await cliBatch.commit();
+      }
 
       const supSnap = await getDocs(collection(db, COL_SUPPLIERS));
-      const supBatch = writeBatch(db);
-      supSnap.forEach(d => supBatch.update(d.ref, { balance: 0 }));
-      await supBatch.commit();
+      if (!supSnap.empty) {
+        const supBatch = writeBatch(db);
+        supSnap.forEach(d => supBatch.update(d.ref, { balance: 0 }));
+        await supBatch.commit();
+      }
 
-      await addFirestoreAudit('PERMANENT_WIPE_TRANSACTIONS', 'SYSTEM', 'TRANSACTIONS', 'Permanently wiped all transactions and daily positions in Cloud Firestore', user);
-      return { success: true, message: 'All transactions, day closures, and positions have been permanently wiped from the centralized cloud database.' };
-    } else {
-      // FULL SYSTEM FACTORY RESET
+      const ptrSnap = await getDocs(collection(db, COL_PARTNERS));
+      if (!ptrSnap.empty) {
+        const ptrBatch = writeBatch(db);
+        ptrSnap.forEach(d => ptrBatch.update(d.ref, { balance: 0 }));
+        await ptrBatch.commit();
+      }
+
+      const actionText = mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES'
+        ? 'Cleared all transactions & zeroed all balances to Rs. 0 in Cloud Firestore'
+        : 'Wiped all transactions & restored opening balances in Cloud Firestore';
+
+      await addFirestoreAudit('PERMANENT_WIPE_TRANSACTIONS', 'SYSTEM', 'TRANSACTIONS', actionText, user);
+      return {
+        success: true,
+        message: mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES'
+          ? 'All transactions, day closures, and positions have been wiped. All accounts reset to clean Rs. 0.00 balance.'
+          : 'All transactions, day closures, and positions have been permanently wiped from the centralized cloud database.'
+      };
+    } else if (mode === 'PURGE_ALL_DATA_BLANK') {
+      // Complete Blank Slate Purge (Deletes everything including master records)
       await deleteEntireCollection(COL_TRANSACTIONS);
       await deleteEntireCollection(COL_DAILY_POSITIONS);
       await deleteEntireCollection(COL_CLOSING_SESSIONS);
@@ -1190,17 +1310,42 @@ export const api = {
       await deleteEntireCollection(COL_PARTNERS);
       await deleteEntireCollection(COL_PAYMENT_METHODS);
 
-      // Re-seed defaults in Cloud Firestore
+      // Keep metadata so it doesn't auto-reseed old defaults
+      await setDoc(doc(db, COL_META, 'initialization'), {
+        initialized: true,
+        clearedAt: new Date().toISOString(),
+        version: '2.0.0',
+        blankSlate: true
+      });
+
+      await addFirestoreAudit('PURGE_DATABASE_BLANK', 'SYSTEM', 'ROOT', 'Completely purged all cloud collections to empty blank state', user);
+      return { success: true, message: 'Complete database purge complete. Database is now a 100% clean empty canvas.' };
+    } else {
+      // FULL SYSTEM FACTORY RESET WITH RS. 0 BALANCES
+      await deleteEntireCollection(COL_TRANSACTIONS);
+      await deleteEntireCollection(COL_DAILY_POSITIONS);
+      await deleteEntireCollection(COL_CLOSING_SESSIONS);
+      await deleteEntireCollection(COL_CLIENTS);
+      await deleteEntireCollection(COL_SUPPLIERS);
+      await deleteEntireCollection(COL_WORKERS);
+      await deleteEntireCollection(COL_VEHICLES);
+      await deleteEntireCollection(COL_BANKS);
+      await deleteEntireCollection(COL_ACCOUNTS);
+      await deleteEntireCollection(COL_CATEGORIES);
+      await deleteEntireCollection(COL_PARTNERS);
+      await deleteEntireCollection(COL_PAYMENT_METHODS);
+
+      // Re-seed clean defaults in Cloud Firestore with 0 opening and current balances
       const batch = writeBatch(db);
       for (const b of DEFAULT_BANKS) batch.set(doc(db, COL_BANKS, b.id), b);
-      for (const a of DEFAULT_ACCOUNTS) batch.set(doc(db, COL_ACCOUNTS, a.id), a);
+      for (const a of DEFAULT_ACCOUNTS) batch.set(doc(db, COL_ACCOUNTS, a.id), { ...a, openingBalance: 0, currentBalance: 0 });
       for (const c of DEFAULT_CATEGORIES) batch.set(doc(db, COL_CATEGORIES, c.id), c);
-      for (const p of DEFAULT_PARTNERS) batch.set(doc(db, COL_PARTNERS, p.id), p);
+      for (const p of DEFAULT_PARTNERS) batch.set(doc(db, COL_PARTNERS, p.id), { ...p, balance: 0 });
       for (const pm of DEFAULT_PAYMENT_METHODS) batch.set(doc(db, COL_PAYMENT_METHODS, pm.id), pm);
       await batch.commit();
 
-      await addFirestoreAudit('PERMANENT_FACTORY_RESET', 'SYSTEM', 'ROOT', 'Executed full system factory reset in Cloud Firestore', user);
-      return { success: true, message: 'Full system factory reset complete. Cloud Firestore database restored to pristine initial master state.' };
+      await addFirestoreAudit('PERMANENT_FACTORY_RESET', 'SYSTEM', 'ROOT', 'Executed full system factory reset in Cloud Firestore with clean Rs. 0 balances', user);
+      return { success: true, message: 'Full system factory reset complete. Cloud Firestore database restored to clean Rs. 0.00 pristine state.' };
     }
   },
 
@@ -1336,7 +1481,7 @@ export const api = {
       if (Array.isArray(items)) {
         for (const item of items) {
           if (item && item[idField]) {
-            batch.set(doc(db, colName, item[idField]), item);
+            batch.set(doc(db, colName, item[idField]), sanitizeForFirestore(item));
           }
         }
       }
