@@ -17,9 +17,11 @@ import {
   FileSpreadsheet,
   CheckCircle2,
   RefreshCw,
-  HardDrive
+  HardDrive,
+  FileCode
 } from 'lucide-react';
 import { FinancialAccount } from '../types';
+import { api } from '../services/apiClient';
 
 interface SettingsViewProps {
   accounts: FinancialAccount[];
@@ -42,6 +44,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // Backup & Restore State
   const [exportLoading, setExportLoading] = useState(false);
+  const [exportJsonLoading, setExportJsonLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [backupMessage, setBackupMessage] = useState<{ type: 'success' | 'error'; text: string; details?: any } | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -53,9 +56,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setExportLoading(true);
     setBackupMessage(null);
     try {
-      const res = await fetch('/api/backup/export');
-      if (!res.ok) throw new Error('Failed to generate system backup XLSX');
-      const blob = await res.blob();
+      const blob = await api.exportFullBackupWorkbook();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -66,12 +67,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       document.body.removeChild(a);
       setBackupMessage({
         type: 'success',
-        text: 'Full system XLSX backup workbook downloaded successfully! Save this file to restore data whenever needed.'
+        text: 'Full system XLSX backup workbook generated and downloaded successfully! Works across Cloudflare and server environments.'
       });
     } catch (err: any) {
       setBackupMessage({ type: 'error', text: err.message || 'Export failed' });
     } finally {
       setExportLoading(false);
+    }
+  };
+
+  const handleExportJsonBackup = () => {
+    setExportJsonLoading(true);
+    setBackupMessage(null);
+    try {
+      const blob = api.exportFullBackupJson();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `FBM_Financial_Database_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setBackupMessage({
+        type: 'success',
+        text: 'Complete database JSON backup file generated and downloaded successfully!'
+      });
+    } catch (err: any) {
+      setBackupMessage({ type: 'error', text: err.message || 'JSON export failed' });
+    } finally {
+      setExportJsonLoading(false);
     }
   };
 
@@ -82,40 +107,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setBackupMessage(null);
 
     try {
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        try {
-          const resultStr = evt.target?.result as string;
-          const base64 = resultStr.split(',')[1] || resultStr;
-
-          const res = await fetch('/api/backup/import', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-User': 'System Administrator'
-            },
-            body: JSON.stringify({ fileBase64: base64 })
-          });
-
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Failed to restore backup');
-
-          setBackupMessage({
-            type: 'success',
-            text: 'System state cleanly restored from XLSX backup workbook!',
-            details: data.result
-          });
-          setSelectedFile(null);
-          onRefreshData();
-        } catch (err: any) {
-          setBackupMessage({ type: 'error', text: err.message || 'Restore failed' });
-        } finally {
-          setImportLoading(false);
-        }
-      };
-      reader.readAsDataURL(selectedFile);
+      const res = await api.restoreBackupFile(selectedFile, 'System Administrator');
+      setBackupMessage({
+        type: 'success',
+        text: res.message,
+        details: res.result
+      });
+      setSelectedFile(null);
+      onRefreshData();
     } catch (err: any) {
-      setBackupMessage({ type: 'error', text: err.message || 'Error reading backup file' });
+      setBackupMessage({ type: 'error', text: err.message || 'Failed to restore backup file' });
+    } finally {
       setImportLoading(false);
     }
   };
@@ -133,22 +135,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     setWipeLoading(true);
     try {
-      const res = await fetch('/api/admin/wipe-data', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User': 'System Administrator'
-        },
-        body: JSON.stringify({ mode: wipeMode })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to wipe data');
-
-      setWipeSuccess(data.message || 'System data clearance completed successfully.');
+      const res = await api.wipeData(wipeMode, 'System Administrator');
+      setWipeSuccess(res.message || 'System data clearance completed successfully.');
       setWipeConfirmText('');
       onRefreshData();
     } catch (err: any) {
-      setWipeError(err.message);
+      setWipeError(err.message || 'Failed to wipe data');
     } finally {
       setWipeLoading(false);
     }
@@ -325,41 +317,60 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <Download className="w-4 h-4 text-indigo-600" /> Export Full System Backup (XLSX)
                 </div>
                 <p className="text-slate-600 text-[11px] leading-relaxed">
-                  Downloads an all-inclusive Excel workbook (`.xlsx`) containing separate sheets for Ledger Transactions, Master Categories, Financial Accounts, Banks, Clients, Suppliers, Partners, Workers, Vehicles, Daily Positions, and Audit Logs.
+                  Downloads an all-inclusive Excel workbook (`.xlsx`) or complete database (`.json`) containing separate datasets for Ledger Transactions, Master Categories, Financial Accounts, Banks, Clients, Suppliers, Partners, Workers, Vehicles, Daily Positions, and Audit Logs.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleExportBackup}
-                disabled={exportLoading}
-                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl shadow-xs cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
-              >
-                {exportLoading ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" /> Generating XLSX...
-                  </>
-                ) : (
-                  <>
-                    <FileSpreadsheet className="w-4 h-4" /> Download XLSX System Backup
-                  </>
-                )}
-              </button>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  disabled={exportLoading}
+                  className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold rounded-xl shadow-xs cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 transition-all"
+                >
+                  {exportLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" /> Generating XLSX...
+                    </>
+                  ) : (
+                    <>
+                      <FileSpreadsheet className="w-4 h-4" /> Download XLSX System Backup
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportJsonBackup}
+                  disabled={exportJsonLoading}
+                  className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-xs cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 transition-all text-xs"
+                >
+                  {exportJsonLoading ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Exporting JSON...
+                    </>
+                  ) : (
+                    <>
+                      <FileCode className="w-3.5 h-3.5 text-indigo-400" /> Download JSON Backup (.json)
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Import / Restore Card */}
             <form onSubmit={handleImportBackup} className="p-5 bg-emerald-50/50 border border-emerald-100 rounded-xl space-y-3 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 font-extrabold text-sm text-emerald-950 mb-1">
-                  <Upload className="w-4 h-4 text-emerald-600" /> Import / Restore Backup (XLSX)
+                  <Upload className="w-4 h-4 text-emerald-600" /> Import / Restore Backup (XLSX / JSON)
                 </div>
                 <p className="text-slate-600 text-[11px] leading-relaxed mb-3">
-                  Upload a previously exported system backup XLSX file. This will restore all master categories, transactions, accounts, clients, suppliers, workers, and vehicles cleanly.
+                  Upload a previously exported system backup file (`.xlsx` or `.json`). This will restore all master categories, transactions, accounts, clients, suppliers, workers, and vehicles cleanly.
                 </p>
 
                 <input
                   type="file"
-                  accept=".xlsx, .xls"
+                  accept=".xlsx, .xls, .json"
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                   className="w-full text-xs text-slate-700 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-extrabold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 file:cursor-pointer cursor-pointer bg-white p-1.5 border border-slate-200 rounded-xl"
                 />
@@ -376,7 +387,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </>
                 ) : (
                   <>
-                    <RotateCcw className="w-4 h-4" /> Restore System from XLSX Backup
+                    <RotateCcw className="w-4 h-4" /> Restore System from Backup
                   </>
                 )}
               </button>

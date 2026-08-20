@@ -11,6 +11,7 @@ import {
   Vehicle,
   PaymentMethod
 } from '../types';
+import { api } from '../services/apiClient';
 
 interface EditTransactionModalProps {
   transaction: LedgerTransaction | null;
@@ -59,22 +60,11 @@ export const EditTransactionModal: React.FC<EditTransactionModalProps> = ({
     setError('');
 
     try {
-      const res = await fetch(`/api/transactions/${transaction.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User': 'Finance Supervisor'
-        },
-        body: JSON.stringify(formData)
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update transaction');
-
+      await api.updateTransaction(transaction.id, formData, 'Finance Supervisor');
       onSuccess();
       onClose();
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to update transaction');
     } finally {
       setLoading(false);
     }

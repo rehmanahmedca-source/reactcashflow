@@ -12,6 +12,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { DailyAccountPosition, DailyClosingSession } from '../types';
+import { api } from '../services/apiClient';
 
 interface DailyReconciliationViewProps {
   onRefreshData: () => void;
@@ -48,13 +49,11 @@ export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = (
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/reconciliation?date=${dateStr}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch reconciliation state');
+      const data = await api.getReconciliation(dateStr);
       setSession(data.session);
       setPositions(data.positions);
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to load reconciliation state');
     } finally {
       setLoading(false);
     }
@@ -69,24 +68,18 @@ export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = (
     if (!countAccId) return;
 
     try {
-      const res = await fetch('/api/reconciliation/count', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Auditor' },
-        body: JSON.stringify({
-          date: selectedDate,
-          accountId: countAccId,
-          actualCountedBalance: Number(countValue),
-          notes: countNotes
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save actual count');
-
+      await api.saveReconciliationCount(
+        selectedDate,
+        countAccId,
+        Number(countValue),
+        countNotes,
+        'Finance Auditor'
+      );
       setCountAccId(null);
       fetchReconciliationData(selectedDate);
       onRefreshData();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Failed to save actual count');
     }
   };
 
@@ -94,22 +87,17 @@ export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = (
     e.preventDefault();
     if (!settleAccId || !settleReason) return;
 
-    const type = settleAmount < 0 ? 'LOSS' : 'EXCESS';
+    const type = settleAmount < 0 ? 'DEFICIT' : 'SURPLUS';
 
     try {
-      const res = await fetch('/api/reconciliation/settle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Supervisor' },
-        body: JSON.stringify({
-          date: selectedDate,
-          accountId: settleAccId,
-          type,
-          amount: Math.abs(settleAmount),
-          reason: settleReason
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to settle difference');
+      await api.settleDifference(
+        selectedDate,
+        settleAccId,
+        type,
+        Math.abs(settleAmount),
+        settleReason,
+        'Finance Supervisor'
+      );
 
       setSettleAccId(null);
       setSettleReason('');
@@ -117,25 +105,18 @@ export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = (
       fetchReconciliationData(selectedDate);
       onRefreshData();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Failed to settle difference');
     }
   };
 
   const handleCloseDay = async () => {
     try {
-      const res = await fetch('/api/reconciliation/close-day', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Controller' },
-        body: JSON.stringify({ date: selectedDate, notes: closeNotes })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to close day');
-
+      await api.closeDay(selectedDate, closeNotes, 'Finance Controller');
       setSuccessMsg(`Financial day ${selectedDate} is now CLOSED and protected.`);
       fetchReconciliationData(selectedDate);
       onRefreshData();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Failed to close day');
     }
   };
 
@@ -144,21 +125,14 @@ export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = (
     if (!reopenReason) return;
 
     try {
-      const res = await fetch('/api/reconciliation/reopen-day', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Director' },
-        body: JSON.stringify({ date: selectedDate, reason: reopenReason })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to reopen day');
-
+      await api.reopenDay(selectedDate, reopenReason, 'Finance Director');
       setShowReopenModal(false);
       setReopenReason('');
       setSuccessMsg(`Day ${selectedDate} reopened for modification.`);
       fetchReconciliationData(selectedDate);
       onRefreshData();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Failed to reopen day');
     }
   };
 

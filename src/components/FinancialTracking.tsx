@@ -36,6 +36,7 @@ import {
 } from '../types';
 import { SearchableCombobox, ComboboxItem } from './SearchableCombobox';
 import { EditTransactionModal } from './EditTransactionModal';
+import { api } from '../services/apiClient';
 
 interface FinancialTrackingProps {
   accounts: FinancialAccount[];
@@ -111,17 +112,11 @@ export const FinancialTracking: React.FC<FinancialTrackingProps> = ({
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/tracking/filtered', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(activeFilters)
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch filtered records');
+      const data = await api.getFilteredTracking(activeFilters);
       setTransactions(data.transactions);
       setSummary(data.summary);
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to load filtered transactions');
     } finally {
       setLoading(false);
     }
@@ -291,20 +286,13 @@ export const FinancialTracking: React.FC<FinancialTrackingProps> = ({
     if (!voidTxnId || !voidReason) return;
 
     try {
-      const res = await fetch(`/api/transactions/${voidTxnId}/void`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Supervisor' },
-        body: JSON.stringify({ reason: voidReason })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to void transaction');
-
+      await api.voidTransaction(voidTxnId, voidReason, 'Finance Supervisor');
       setVoidTxnId(null);
       setVoidReason('');
       onRefreshData();
       fetchFilteredData(filter);
     } catch (err: any) {
-      alert(`Error voiding transaction: ${err.message}`);
+      alert(`Error voiding transaction: ${err.message || 'Failed'}`);
     }
   };
 
@@ -781,18 +769,12 @@ export const FinancialTracking: React.FC<FinancialTrackingProps> = ({
                     setDeleteLoading(true);
                     setDeleteError('');
                     try {
-                      const res = await fetch(`/api/transactions/${deletingTxn.id}`, {
-                        method: 'DELETE',
-                        headers: { 'X-User': 'Finance Supervisor' }
-                      });
-                      const data = await res.json();
-                      if (!res.ok) throw new Error(data.error || 'Failed to delete transaction');
-
+                      await api.deleteTransaction(deletingTxn.id, 'Finance Supervisor');
                       setDeletingTxn(null);
                       onRefreshData();
                       fetchFilteredData(filter);
                     } catch (err: any) {
-                      setDeleteError(err.message);
+                      setDeleteError(err.message || 'Failed to delete transaction');
                     } finally {
                       setDeleteLoading(false);
                     }

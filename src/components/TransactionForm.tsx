@@ -28,6 +28,7 @@ import {
 } from '../types';
 import { SearchableCombobox, ComboboxItem } from './SearchableCombobox';
 import { QuickAddModal, QuickAddType } from './QuickAddModal';
+import { api } from '../services/apiClient';
 
 interface TransactionFormProps {
   accounts: FinancialAccount[];
@@ -248,32 +249,22 @@ export const TransactionForm: React.FC<TransactionFormProps> = ({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/transactions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User': 'Finance Operator'
-        },
-        body: JSON.stringify({
-          date,
-          time,
-          direction,
-          accountId,
-          targetAccountId: direction === 'TRANSFER' ? targetAccountId : undefined,
-          categoryId: finalCategoryId,
-          amount: Number(amount),
-          paymentMethod,
-          entityType: direction === 'TRANSFER' ? 'NONE' : entityType,
-          entityId: direction !== 'TRANSFER' && entityType !== 'NONE' ? entityId : undefined,
-          vehicleId: vehicleId || undefined,
-          referenceNumber,
-          description: description || (direction === 'TRANSFER' ? `Fund Transfer from ${accounts.find(a => a.id === accountId)?.name} to ${accounts.find(a => a.id === targetAccountId)?.name}` : ''),
-          attachmentUrl
-        })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to post transaction');
+      const data = await api.createTransaction({
+        date,
+        time,
+        direction,
+        accountId,
+        targetAccountId: direction === 'TRANSFER' ? targetAccountId : undefined,
+        categoryId: finalCategoryId,
+        amount: Number(amount),
+        paymentMethod,
+        entityType: direction === 'TRANSFER' ? 'NONE' : entityType,
+        entityId: direction !== 'TRANSFER' && entityType !== 'NONE' ? entityId : undefined,
+        vehicleId: vehicleId || undefined,
+        referenceNumber,
+        description: description || (direction === 'TRANSFER' ? `Fund Transfer from ${accounts.find(a => a.id === accountId)?.name} to ${accounts.find(a => a.id === targetAccountId)?.name}` : ''),
+        attachmentUrl
+      }, 'Finance Operator');
 
       setSuccessMsg(`Transaction ${data.id} posted successfully!`);
       onRefreshData();
@@ -287,7 +278,7 @@ export const TransactionForm: React.FC<TransactionFormProps> = ({
       setVehicleId('');
       setEntityId('');
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to post transaction');
     } finally {
       setLoading(false);
     }

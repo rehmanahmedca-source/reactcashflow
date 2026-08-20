@@ -22,6 +22,7 @@ import { DailyReconciliationView } from './components/DailyReconciliationView';
 import { MasterDataView } from './components/MasterDataView';
 import { AuditLogView } from './components/AuditLogView';
 import { SettingsView } from './components/SettingsView';
+import { api } from './services/apiClient';
 
 export default function App() {
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -46,34 +47,6 @@ export default function App() {
   const fetchAllData = async () => {
     try {
       const [
-        banksRes,
-        accountsRes,
-        categoriesRes,
-        clientsRes,
-        suppliersRes,
-        partnersRes,
-        workersRes,
-        vehiclesRes,
-        pmRes,
-        txnsRes,
-        auditRes,
-        reconRes
-      ] = await Promise.all([
-        fetch('/api/banks'),
-        fetch('/api/accounts'),
-        fetch('/api/categories'),
-        fetch('/api/clients'),
-        fetch('/api/suppliers'),
-        fetch('/api/partners'),
-        fetch('/api/workers'),
-        fetch('/api/vehicles'),
-        fetch('/api/payment-methods'),
-        fetch('/api/transactions'),
-        fetch('/api/audit-logs'),
-        fetch(`/api/reconciliation?date=${todayStr}`)
-      ]);
-
-      const [
         banksData,
         accountsData,
         categoriesData,
@@ -87,18 +60,18 @@ export default function App() {
         auditData,
         reconData
       ] = await Promise.all([
-        banksRes.json(),
-        accountsRes.json(),
-        categoriesRes.json(),
-        clientsRes.json(),
-        suppliersRes.json(),
-        partnersRes.json(),
-        workersRes.json(),
-        vehiclesRes.json(),
-        pmRes.json(),
-        txnsRes.json(),
-        auditRes.json(),
-        reconRes.json()
+        api.getBanks(),
+        api.getAccounts(),
+        api.getCategories(),
+        api.getClients(),
+        api.getSuppliers(),
+        api.getPartners(),
+        api.getWorkers(),
+        api.getVehicles(),
+        api.getPaymentMethods(),
+        api.getTransactions(),
+        api.getAuditLogs(),
+        api.getReconciliation(todayStr)
       ]);
 
       setBanks(banksData || []);
@@ -137,14 +110,8 @@ export default function App() {
 
   const handleVoidTxn = async (id: string, reason: string) => {
     try {
-      const res = await fetch(`/api/transactions/${id}/void`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Supervisor' },
-        body: JSON.stringify({ reason })
-      });
-      if (res.ok) {
-        fetchAllData();
-      }
+      await api.voidTransaction(id, reason, 'Supervisor');
+      fetchAllData();
     } catch (err) {
       console.error('Failed to void transaction:', err);
     }

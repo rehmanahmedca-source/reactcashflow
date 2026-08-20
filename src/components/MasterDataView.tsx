@@ -30,6 +30,7 @@ import {
   PaymentMethod
 } from '../types';
 import { QuickAddModal, QuickAddType } from './QuickAddModal';
+import { api } from '../services/apiClient';
 
 interface MasterDataViewProps {
   accounts: FinancialAccount[];
@@ -91,17 +92,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
     setDeleteLoading(true);
     setDeleteError('');
     try {
-      const res = await fetch(`${deletingItem.endpoint}/${deletingItem.id}`, {
-        method: 'DELETE',
-        headers: { 'X-User': 'Finance Supervisor' }
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to delete entity');
+      const user = 'Finance Supervisor';
+      if (deletingItem.type === 'ACCOUNT') await api.deleteAccount(deletingItem.id, user);
+      else if (deletingItem.type === 'BANK') await api.deleteBank(deletingItem.id, user);
+      else if (deletingItem.type === 'CATEGORY') await api.deleteCategory(deletingItem.id, user);
+      else if (deletingItem.type === 'CLIENT') await api.deleteClient(deletingItem.id, user);
+      else if (deletingItem.type === 'SUPPLIER') await api.deleteSupplier(deletingItem.id, user);
+      else if (deletingItem.type === 'PARTNER') await api.deletePartner(deletingItem.id, user);
+      else if (deletingItem.type === 'WORKER') await api.deleteWorker(deletingItem.id, user);
+      else if (deletingItem.type === 'VEHICLE') await api.deleteVehicle(deletingItem.id, user);
+      else if (deletingItem.type === 'PAYMENT_METHOD') await api.deletePaymentMethod(deletingItem.id, user);
 
       setDeletingItem(null);
       onRefreshData();
     } catch (err: any) {
-      setDeleteError(err.message);
+      setDeleteError(err.message || 'Failed to delete entity');
     } finally {
       setDeleteLoading(false);
     }
@@ -120,18 +125,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
 
     setWipeLoading(true);
     try {
-      const res = await fetch('/api/admin/wipe-data', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User': 'System Administrator'
-        },
-        body: JSON.stringify({ mode: wipeMode })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to wipe data');
-
-      setWipeSuccess(data.message || 'Data clearance completed successfully.');
+      const res = await api.wipeData(wipeMode, 'System Administrator');
+      setWipeSuccess(res.message || 'Data clearance completed successfully.');
       onRefreshData();
       setTimeout(() => {
         setShowWipeModal(false);
@@ -139,7 +134,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({
         setWipeConfirmText('');
       }, 1500);
     } catch (err: any) {
-      setWipeError(err.message);
+      setWipeError(err.message || 'Failed to wipe data');
     } finally {
       setWipeLoading(false);
     }

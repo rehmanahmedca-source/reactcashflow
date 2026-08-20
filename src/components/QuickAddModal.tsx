@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, AlertCircle } from 'lucide-react';
+import { api } from '../services/apiClient';
 
 export type QuickAddType = 'CLIENT' | 'SUPPLIER' | 'PARTNER' | 'WORKER' | 'VEHICLE' | 'BANK' | 'ACCOUNT' | 'CATEGORY' | 'PAYMENT_METHOD';
 
@@ -61,34 +62,52 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
     setError('');
 
     try {
-      let endpoint = '';
-      if (type === 'CLIENT') endpoint = '/api/clients';
-      else if (type === 'SUPPLIER') endpoint = '/api/suppliers';
-      else if (type === 'PARTNER') endpoint = '/api/partners';
-      else if (type === 'WORKER') endpoint = '/api/workers';
-      else if (type === 'VEHICLE') endpoint = '/api/vehicles';
-      else if (type === 'BANK') endpoint = '/api/banks';
-      else if (type === 'ACCOUNT') endpoint = '/api/accounts';
-      else if (type === 'CATEGORY') endpoint = '/api/categories';
-      else if (type === 'PAYMENT_METHOD') endpoint = '/api/payment-methods';
+      let data: any;
+      const user = 'Finance Operator';
 
-      const url = isEditMode ? `${endpoint}/${itemToEdit.id}` : endpoint;
-      const method = isEditMode ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json', 'X-User': 'Finance Operator' },
-        body: JSON.stringify({ active: true, status: 'ACTIVE', ...formData })
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save record');
+      if (type === 'CLIENT') {
+        data = isEditMode
+          ? await api.updateClient(itemToEdit.id, formData, user)
+          : await api.addClient(formData, user);
+      } else if (type === 'SUPPLIER') {
+        data = isEditMode
+          ? await api.updateSupplier(itemToEdit.id, formData, user)
+          : await api.addSupplier(formData, user);
+      } else if (type === 'PARTNER') {
+        data = isEditMode
+          ? await api.updatePartner(itemToEdit.id, formData, user)
+          : await api.addPartner(formData, user);
+      } else if (type === 'WORKER') {
+        data = isEditMode
+          ? await api.updateWorker(itemToEdit.id, formData, user)
+          : await api.addWorker(formData, user);
+      } else if (type === 'VEHICLE') {
+        data = isEditMode
+          ? await api.updateVehicle(itemToEdit.id, formData, user)
+          : await api.addVehicle(formData, user);
+      } else if (type === 'BANK') {
+        data = isEditMode
+          ? await api.updateBank(itemToEdit.id, formData, user)
+          : await api.addBank(formData, user);
+      } else if (type === 'ACCOUNT') {
+        data = isEditMode
+          ? await api.updateAccount(itemToEdit.id, formData, user)
+          : await api.addAccount(formData, user);
+      } else if (type === 'CATEGORY') {
+        data = isEditMode
+          ? await api.updateCategory(itemToEdit.id, formData, user)
+          : await api.addCategory(formData, user);
+      } else if (type === 'PAYMENT_METHOD') {
+        data = isEditMode
+          ? await api.updatePaymentMethod(itemToEdit.id, formData, user)
+          : await api.addPaymentMethod(formData, user);
+      }
 
       onSuccess(data);
       onClose();
       setFormData({});
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Failed to save record');
     } finally {
       setLoading(false);
     }
