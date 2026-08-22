@@ -27,14 +27,26 @@ export interface AuditIssue {
   actual?: any;
 }
 
+export interface AuditDiscrepancy {
+  type: string;
+  entityId: string;
+  entityName: string;
+  storedBalance: number;
+  authoritativeBalance: number;
+  difference: number;
+}
+
 export interface IntegrityAuditResult {
   passed: boolean;
+  timestamp: string;
   totalTransactions: number;
+  totalAccounts: number;
+  totalAccountLiquidity: number;
   postedCount: number;
   voidedCount: number;
-  totalLiquidity: number;
+  discrepancies: AuditDiscrepancy[];
   issues: AuditIssue[];
-  accountAudits: {
+  accountAudits?: {
     accountId: string;
     accountName: string;
     openingBalance: number;
@@ -299,7 +311,7 @@ export function computeFilterSummary(transactions: LedgerTransaction[]): FilterS
     transferIn: fromPaisa(transferInPaisa),
     transferOut: fromPaisa(transferInPaisa),
     netMovement: fromPaisa(netMovementPaisa),
-    transactionCount: transactions.length,
+    transactionCount: validTxns.length,
     categoryBreakdown: Array.from(categoryMap.values()).map(c => ({
       categoryName: c.name,
       direction: c.direction,
@@ -433,10 +445,13 @@ export function runIntegrityAudit(
 
   return {
     passed: issues.filter(i => i.severity === 'CRITICAL').length === 0,
+    timestamp: new Date().toISOString(),
     totalTransactions: transactions.length,
+    totalAccounts: accounts.length,
+    totalAccountLiquidity: fromPaisa(totalLiquidityPaisa),
     postedCount,
     voidedCount,
-    totalLiquidity: fromPaisa(totalLiquidityPaisa),
+    discrepancies: [],
     issues,
     accountAudits
   };

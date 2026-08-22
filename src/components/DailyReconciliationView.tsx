@@ -13,13 +13,14 @@ import {
 } from 'lucide-react';
 import { DailyAccountPosition, DailyClosingSession } from '../types';
 import { api } from '../services/apiClient';
+import { getKarachiToday } from '../utils/dateTime';
 
 interface DailyReconciliationViewProps {
   onRefreshData: () => void;
 }
 
 export const DailyReconciliationView: React.FC<DailyReconciliationViewProps> = ({ onRefreshData }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getKarachiToday();
   const [selectedDate, setSelectedDate] = useState(todayStr);
 
   const [session, setSession] = useState<DailyClosingSession | undefined>();
