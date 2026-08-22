@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { FinancialAccount, LedgerTransaction } from '../types';
 import { NavTab } from './Navigation';
+import { getKarachiToday } from '../utils/dateTime';
+import { addMoney, subMoney, formatNumber } from '../utils/financialMath';
 
 interface DashboardViewProps {
   accounts: FinancialAccount[];
@@ -32,16 +34,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const cashAccounts = accounts.filter(a => a.accountType === 'CASH' || a.accountType === 'PETTY_CASH');
   const bankAccounts = accounts.filter(a => a.accountType === 'BANK' || a.accountType === 'DIGITAL');
 
-  const totalCash = cashAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
-  const totalBank = bankAccounts.reduce((sum, a) => sum + a.currentBalance, 0);
-  const totalLiquidity = totalCash + totalBank;
+  const totalCash = cashAccounts.reduce((sum, a) => addMoney(sum, a.currentBalance), 0);
+  const totalBank = bankAccounts.reduce((sum, a) => addMoney(sum, a.currentBalance), 0);
+  const totalLiquidity = addMoney(totalCash, totalBank);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getKarachiToday();
   const todayTxns = transactions.filter(t => t.date === todayStr && t.status === 'POSTED');
 
-  const todayIn = todayTxns.filter(t => t.direction === 'IN').reduce((sum, t) => sum + t.amount, 0);
-  const todayOut = todayTxns.filter(t => t.direction === 'OUT').reduce((sum, t) => sum + t.amount, 0);
-  const todayNet = todayIn - todayOut;
+  const todayIn = todayTxns.filter(t => t.direction === 'IN').reduce((sum, t) => addMoney(sum, t.amount), 0);
+  const todayOut = todayTxns.filter(t => t.direction === 'OUT').reduce((sum, t) => addMoney(sum, t.amount), 0);
+  const todayNet = subMoney(todayIn, todayOut);
 
   const recentTxns = transactions.slice(0, 7);
 

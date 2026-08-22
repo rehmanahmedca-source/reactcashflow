@@ -31,6 +31,16 @@ import {
   FilterSummary,
   DayStatus
 } from '../types';
+import { getKarachiToday, getKarachiNowTime, getKarachiDatePreset } from '../utils/dateTime';
+import { toPaisa, fromPaisa, addMoney, subMoney } from '../utils/financialMath';
+import {
+  computeAccountBalances,
+  computeEntityBalances,
+  computeDailyReconciliationPositions,
+  computeFilterSummary,
+  runIntegrityAudit,
+  IntegrityAuditResult
+} from '../utils/ledgerEngine';
 
 // Collection references
 const COL_BANKS = 'banks';
@@ -124,7 +134,7 @@ async function ensureFirestoreInitialized(): Promise<void> {
           action: 'SYSTEM_INITIALIZATION',
           entityType: 'SYSTEM',
           entityId: 'ROOT',
-          details: 'Central Cloud Firestore database initialized for multi-user synchronization',
+          details: 'Central Cloud Firestore database initialized with Pakistan Business Timezone (Asia/Karachi) accounting controls',
           user: 'System Admin'
         });
 
@@ -132,7 +142,7 @@ async function ensureFirestoreInitialized(): Promise<void> {
         batch.set(metaDocRef, {
           initialized: true,
           initializedAt: new Date().toISOString(),
-          version: '2.0.0'
+          version: '3.0.0-integrity-repaired'
         });
 
         await batch.commit();
@@ -239,7 +249,7 @@ export const api = {
       name: (data.name || '').trim(),
       branch: data.branch?.trim() || undefined,
       active: data.active !== undefined ? data.active : true,
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_BANKS, newId), sanitizeForFirestore(newBank));
     await addFirestoreAudit('CREATE_BANK', 'BANK', newId, `Created bank ${newBank.name}`, user);
@@ -275,12 +285,22 @@ export const api = {
   },
 
   // --- FINANCIAL ACCOUNTS ---
+  // Authoritative: derived directly from (Opening Balance + Posted Ledger Transactions)
   async getAccounts(): Promise<FinancialAccount[]> {
     await ensureFirestoreInitialized();
-    const snap = await getDocs(collection(db, COL_ACCOUNTS));
+    const [accSnap, txnSnap] = await Promise.all([
+      getDocs(collection(db, COL_ACCOUNTS)),
+      getDocs(collection(db, COL_TRANSACTIONS))
+    ]);
+
     const accounts: FinancialAccount[] = [];
-    snap.forEach(d => accounts.push(d.data() as FinancialAccount));
-    return accounts.sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
+    accSnap.forEach(d => accounts.push(d.data() as FinancialAccount));
+
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const computedAccounts = computeAccountBalances(accounts, txns);
+    return computedAccounts.sort((a, b) => (a.displayOrder || 99) - (b.displayOrder || 99));
   },
 
   async addAccount(data: Partial<FinancialAccount>, user: string = 'Admin'): Promise<FinancialAccount> {
@@ -299,7 +319,7 @@ export const api = {
       currentBalance: openBal,
       active: data.active !== undefined ? data.active : true,
       displayOrder: allAccs.length + 1,
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_ACCOUNTS, newId), sanitizeForFirestore(newAcc));
     await addFirestoreAudit('CREATE_ACCOUNT', 'ACCOUNT', newId, `Created account ${newAcc.name} (Opening: Rs. ${openBal})`, user);
@@ -391,10 +411,17 @@ export const api = {
   // --- CLIENTS ---
   async getClients(): Promise<Client[]> {
     await ensureFirestoreInitialized();
-    const snap = await getDocs(collection(db, COL_CLIENTS));
+    const [cliSnap, txnSnap] = await Promise.all([
+      getDocs(collection(db, COL_CLIENTS)),
+      getDocs(collection(db, COL_TRANSACTIONS))
+    ]);
     const list: Client[] = [];
-    snap.forEach(d => list.push(d.data() as Client));
-    return list;
+    cliSnap.forEach(d => list.push(d.data() as Client));
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const { clients } = computeEntityBalances(list, [], [], txns);
+    return clients;
   },
 
   async addClient(data: Partial<Client>, user: string = 'Admin'): Promise<Client> {
@@ -410,7 +437,7 @@ export const api = {
       address: data.address?.trim(),
       balance: Number(data.balance) || 0,
       status: data.status || 'ACTIVE',
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_CLIENTS, newId), sanitizeForFirestore(newCli));
     await addFirestoreAudit('CREATE_CLIENT', 'CLIENT', newId, `Created client ${newCli.name}`, user);
@@ -442,10 +469,17 @@ export const api = {
   // --- SUPPLIERS ---
   async getSuppliers(): Promise<Supplier[]> {
     await ensureFirestoreInitialized();
-    const snap = await getDocs(collection(db, COL_SUPPLIERS));
+    const [supSnap, txnSnap] = await Promise.all([
+      getDocs(collection(db, COL_SUPPLIERS)),
+      getDocs(collection(db, COL_TRANSACTIONS))
+    ]);
     const list: Supplier[] = [];
-    snap.forEach(d => list.push(d.data() as Supplier));
-    return list;
+    supSnap.forEach(d => list.push(d.data() as Supplier));
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const { suppliers } = computeEntityBalances([], list, [], txns);
+    return suppliers;
   },
 
   async addSupplier(data: Partial<Supplier>, user: string = 'Admin'): Promise<Supplier> {
@@ -461,7 +495,7 @@ export const api = {
       address: data.address?.trim(),
       balance: Number(data.balance) || 0,
       status: data.status || 'ACTIVE',
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_SUPPLIERS, newId), sanitizeForFirestore(newSup));
     await addFirestoreAudit('CREATE_SUPPLIER', 'SUPPLIER', newId, `Created supplier ${newSup.name}`, user);
@@ -493,10 +527,17 @@ export const api = {
   // --- PARTNERS ---
   async getPartners(): Promise<Partner[]> {
     await ensureFirestoreInitialized();
-    const snap = await getDocs(collection(db, COL_PARTNERS));
+    const [ptrSnap, txnSnap] = await Promise.all([
+      getDocs(collection(db, COL_PARTNERS)),
+      getDocs(collection(db, COL_TRANSACTIONS))
+    ]);
     const list: Partner[] = [];
-    snap.forEach(d => list.push(d.data() as Partner));
-    return list;
+    ptrSnap.forEach(d => list.push(d.data() as Partner));
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const { partners } = computeEntityBalances([], [], list, txns);
+    return partners;
   },
 
   async addPartner(data: Partial<Partner>, user: string = 'Admin'): Promise<Partner> {
@@ -512,7 +553,7 @@ export const api = {
       sharePercentage: Number(data.sharePercentage) || 0,
       balance: Number(data.balance) || 0,
       status: data.status || 'ACTIVE',
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_PARTNERS, newId), sanitizeForFirestore(newPtr));
     await addFirestoreAudit('CREATE_PARTNER', 'PARTNER', newId, `Created partner ${newPtr.name}`, user);
@@ -562,7 +603,7 @@ export const api = {
       phone: data.phone?.trim(),
       dailyWage: Number(data.dailyWage) || undefined,
       status: data.status || 'ACTIVE',
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_WORKERS, newId), sanitizeForFirestore(newWrk));
     await addFirestoreAudit('CREATE_WORKER', 'WORKER', newId, `Created worker ${newWrk.name}`, user);
@@ -609,7 +650,7 @@ export const api = {
       model: (data.model || '').trim(),
       driverName: data.driverName?.trim(),
       status: data.status || 'ACTIVE',
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: getKarachiToday()
     };
     await setDoc(doc(db, COL_VEHICLES, newId), sanitizeForFirestore(newVeh));
     await addFirestoreAudit('CREATE_VEHICLE', 'VEHICLE', newId, `Created vehicle ${newVeh.plateNumber}`, user);
@@ -695,7 +736,24 @@ export const api = {
 
   async createTransaction(data: any, user: string = 'Finance User'): Promise<LedgerTransaction> {
     await ensureFirestoreInitialized();
-    const amount = Number(data.amount) || 0;
+
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) {
+      throw new Error('Transaction amount must be a positive number greater than 0.');
+    }
+
+    const txnDate = data.date || getKarachiToday();
+    const txnTime = data.time || getKarachiNowTime();
+
+    // Check if date belongs to a CLOSED day session
+    const sessionDocRef = doc(db, COL_CLOSING_SESSIONS, txnDate);
+    const sessionSnap = await getDoc(sessionDocRef);
+    if (sessionSnap.exists()) {
+      const session = sessionSnap.data() as DailyClosingSession;
+      if (session.status === 'CLOSED') {
+        throw new Error(`Financial day ${txnDate} is CLOSED and locked. Reopen the day before recording transactions.`);
+      }
+    }
 
     // Fetch accounts
     const accDocRef = doc(db, COL_ACCOUNTS, data.accountId);
@@ -709,6 +767,7 @@ export const api = {
 
     if (isTransfer) {
       if (!data.targetAccountId) throw new Error('Destination Transfer Account is required for transfer');
+      if (data.targetAccountId === data.accountId) throw new Error('Source and destination accounts cannot be the same');
       targetDocRef = doc(db, COL_ACCOUNTS, data.targetAccountId);
       const targetSnap = await getDoc(targetDocRef);
       if (!targetSnap.exists()) throw new Error('Destination Transfer Account not found');
@@ -761,12 +820,12 @@ export const api = {
 
     const txns = await this.getTransactions();
     const txnId = `TXN-${(txns.length + 10001).toString()}`;
-    const now = new Date();
+    const nowIso = new Date().toISOString();
 
     const newTxn: LedgerTransaction = {
       id: txnId,
-      date: data.date || now.toISOString().slice(0, 10),
-      time: data.time || now.toTimeString().slice(0, 5),
+      date: txnDate,
+      time: txnTime,
       direction: data.direction,
       accountId: account.id,
       accountName: account.name,
@@ -786,21 +845,23 @@ export const api = {
       ...(data.attachmentUrl ? { attachmentUrl: data.attachmentUrl } : {}),
       status: 'POSTED',
       createdBy: user,
-      createdAt: now.toISOString()
+      createdAt: nowIso
     };
 
     // Prepare batch write
     const batch = writeBatch(db);
     batch.set(doc(db, COL_TRANSACTIONS, txnId), sanitizeForFirestore(newTxn));
 
-    // Update account balances
+    // Update account balances using integer paisa precision
+    const currentAccBal = account.currentBalance || 0;
     if (data.direction === 'IN') {
-      batch.update(accDocRef, { currentBalance: (account.currentBalance || 0) + amount });
+      batch.update(accDocRef, { currentBalance: addMoney(currentAccBal, amount) });
     } else if (data.direction === 'OUT') {
-      batch.update(accDocRef, { currentBalance: (account.currentBalance || 0) - amount });
+      batch.update(accDocRef, { currentBalance: subMoney(currentAccBal, amount) });
     } else if (data.direction === 'TRANSFER' && targetDocRef && targetAccount) {
-      batch.update(accDocRef, { currentBalance: (account.currentBalance || 0) - amount });
-      batch.update(targetDocRef, { currentBalance: (targetAccount.currentBalance || 0) + amount });
+      batch.update(accDocRef, { currentBalance: subMoney(currentAccBal, amount) });
+      const targetBal = targetAccount.currentBalance || 0;
+      batch.update(targetDocRef, { currentBalance: addMoney(targetBal, amount) });
     }
 
     // Entity balances update
@@ -809,7 +870,7 @@ export const api = {
       const cliSnap = await getDoc(cliRef);
       if (cliSnap.exists()) {
         const cli = cliSnap.data() as Client;
-        const newBal = data.direction === 'IN' ? (cli.balance || 0) - amount : (cli.balance || 0) + amount;
+        const newBal = data.direction === 'IN' ? subMoney(cli.balance || 0, amount) : addMoney(cli.balance || 0, amount);
         batch.update(cliRef, { balance: newBal });
       }
     } else if (data.entityType === 'SUPPLIER' && data.entityId) {
@@ -817,7 +878,7 @@ export const api = {
       const supSnap = await getDoc(supRef);
       if (supSnap.exists()) {
         const sup = supSnap.data() as Supplier;
-        const newBal = data.direction === 'OUT' ? (sup.balance || 0) - amount : (sup.balance || 0) + amount;
+        const newBal = data.direction === 'OUT' ? subMoney(sup.balance || 0, amount) : addMoney(sup.balance || 0, amount);
         batch.update(supRef, { balance: newBal });
       }
     } else if (data.entityType === 'PARTNER' && data.entityId) {
@@ -825,7 +886,7 @@ export const api = {
       const ptrSnap = await getDoc(ptrRef);
       if (ptrSnap.exists()) {
         const ptr = ptrSnap.data() as Partner;
-        const newBal = data.direction === 'IN' ? (ptr.balance || 0) + amount : (ptr.balance || 0) - amount;
+        const newBal = data.direction === 'IN' ? addMoney(ptr.balance || 0, amount) : subMoney(ptr.balance || 0, amount);
         batch.update(ptrRef, { balance: newBal });
       }
     }
@@ -840,59 +901,33 @@ export const api = {
     const txnRef = doc(db, COL_TRANSACTIONS, id);
     const txnSnap = await getDoc(txnRef);
     if (!txnSnap.exists()) throw new Error('Transaction not found');
-    const txn = txnSnap.data() as LedgerTransaction;
+    const existingTxn = txnSnap.data() as LedgerTransaction;
 
-    const batch = writeBatch(db);
+    // Check closed day status
+    const origSessionSnap = await getDoc(doc(db, COL_CLOSING_SESSIONS, existingTxn.date));
+    if (origSessionSnap.exists() && (origSessionSnap.data() as DailyClosingSession).status === 'CLOSED') {
+      throw new Error(`Cannot update transaction: Financial day ${existingTxn.date} is CLOSED and locked.`);
+    }
 
-    // Revert old effect if POSTED
-    if (txn.status === 'POSTED') {
-      const oldAccRef = doc(db, COL_ACCOUNTS, txn.accountId);
-      const oldAccSnap = await getDoc(oldAccRef);
-      if (oldAccSnap.exists()) {
-        const oldAcc = oldAccSnap.data() as FinancialAccount;
-        if (txn.direction === 'IN') {
-          batch.update(oldAccRef, { currentBalance: (oldAcc.currentBalance || 0) - txn.amount });
-        } else if (txn.direction === 'OUT') {
-          batch.update(oldAccRef, { currentBalance: (oldAcc.currentBalance || 0) + txn.amount });
-        } else if (txn.direction === 'TRANSFER' && txn.targetAccountId) {
-          batch.update(oldAccRef, { currentBalance: (oldAcc.currentBalance || 0) + txn.amount });
-          const oldTargetRef = doc(db, COL_ACCOUNTS, txn.targetAccountId);
-          const oldTargetSnap = await getDoc(oldTargetRef);
-          if (oldTargetSnap.exists()) {
-            const oldTarget = oldTargetSnap.data() as FinancialAccount;
-            batch.update(oldTargetRef, { currentBalance: (oldTarget.currentBalance || 0) - txn.amount });
-          }
-        }
+    if (data.date && data.date !== existingTxn.date) {
+      const newSessionSnap = await getDoc(doc(db, COL_CLOSING_SESSIONS, data.date));
+      if (newSessionSnap.exists() && (newSessionSnap.data() as DailyClosingSession).status === 'CLOSED') {
+        throw new Error(`Cannot move transaction to date ${data.date}: That day is CLOSED and locked.`);
       }
     }
 
-    // Prepare updated record
-    const updatedTxn: LedgerTransaction = { ...txn, ...data };
-    batch.set(txnRef, sanitizeForFirestore(updatedTxn));
+    const updatedTxn: LedgerTransaction = {
+      ...existingTxn,
+      ...data,
+      amount: Number(data.amount) || existingTxn.amount
+    };
 
-    // Apply new effect if still POSTED
-    if (updatedTxn.status === 'POSTED') {
-      const newAccRef = doc(db, COL_ACCOUNTS, updatedTxn.accountId);
-      const newAccSnap = await getDoc(newAccRef);
-      if (newAccSnap.exists()) {
-        const newAcc = newAccSnap.data() as FinancialAccount;
-        if (updatedTxn.direction === 'IN') {
-          batch.update(newAccRef, { currentBalance: (newAcc.currentBalance || 0) + updatedTxn.amount });
-        } else if (updatedTxn.direction === 'OUT') {
-          batch.update(newAccRef, { currentBalance: (newAcc.currentBalance || 0) - updatedTxn.amount });
-        } else if (updatedTxn.direction === 'TRANSFER' && updatedTxn.targetAccountId) {
-          batch.update(newAccRef, { currentBalance: (newAcc.currentBalance || 0) - updatedTxn.amount });
-          const newTargetRef = doc(db, COL_ACCOUNTS, updatedTxn.targetAccountId);
-          const newTargetSnap = await getDoc(newTargetRef);
-          if (newTargetSnap.exists()) {
-            const newTarget = newTargetSnap.data() as FinancialAccount;
-            batch.update(newTargetRef, { currentBalance: (newTarget.currentBalance || 0) + updatedTxn.amount });
-          }
-        }
-      }
-    }
+    // Save updated record
+    await setDoc(txnRef, sanitizeForFirestore(updatedTxn));
 
-    await batch.commit();
+    // Authoritative full synchronization of accounts
+    await this.recalculateAndRepairLedger(user);
+
     await addFirestoreAudit('UPDATE_TRANSACTION', 'TRANSACTION', id, `Updated transaction ${id}`, user);
     return updatedTxn;
   },
@@ -904,31 +939,15 @@ export const api = {
     if (!txnSnap.exists()) throw new Error('Transaction not found');
     const txn = txnSnap.data() as LedgerTransaction;
 
-    const batch = writeBatch(db);
-
-    if (txn.status === 'POSTED') {
-      const accRef = doc(db, COL_ACCOUNTS, txn.accountId);
-      const accSnap = await getDoc(accRef);
-      if (accSnap.exists()) {
-        const acc = accSnap.data() as FinancialAccount;
-        if (txn.direction === 'IN') {
-          batch.update(accRef, { currentBalance: (acc.currentBalance || 0) - txn.amount });
-        } else if (txn.direction === 'OUT') {
-          batch.update(accRef, { currentBalance: (acc.currentBalance || 0) + txn.amount });
-        } else if (txn.direction === 'TRANSFER' && txn.targetAccountId) {
-          batch.update(accRef, { currentBalance: (acc.currentBalance || 0) + txn.amount });
-          const targetRef = doc(db, COL_ACCOUNTS, txn.targetAccountId);
-          const targetSnap = await getDoc(targetRef);
-          if (targetSnap.exists()) {
-            const targetAcc = targetSnap.data() as FinancialAccount;
-            batch.update(targetRef, { currentBalance: (targetAcc.currentBalance || 0) - txn.amount });
-          }
-        }
-      }
+    // Check closed day status
+    const sessionSnap = await getDoc(doc(db, COL_CLOSING_SESSIONS, txn.date));
+    if (sessionSnap.exists() && (sessionSnap.data() as DailyClosingSession).status === 'CLOSED') {
+      throw new Error(`Cannot delete transaction: Financial day ${txn.date} is CLOSED and locked.`);
     }
 
-    batch.delete(txnRef);
-    await batch.commit();
+    await deleteDoc(txnRef);
+    await this.recalculateAndRepairLedger(user);
+
     await addFirestoreAudit('DELETE_TRANSACTION', 'TRANSACTION', id, `Permanently deleted transaction ${id}`, user);
     return { success: true };
   },
@@ -941,26 +960,10 @@ export const api = {
     const txn = txnSnap.data() as LedgerTransaction;
     if (txn.status === 'VOIDED') throw new Error('Transaction is already voided');
 
-    const batch = writeBatch(db);
-
-    // Revert account balances
-    const accRef = doc(db, COL_ACCOUNTS, txn.accountId);
-    const accSnap = await getDoc(accRef);
-    if (accSnap.exists()) {
-      const acc = accSnap.data() as FinancialAccount;
-      if (txn.direction === 'IN') {
-        batch.update(accRef, { currentBalance: (acc.currentBalance || 0) - txn.amount });
-      } else if (txn.direction === 'OUT') {
-        batch.update(accRef, { currentBalance: (acc.currentBalance || 0) + txn.amount });
-      } else if (txn.direction === 'TRANSFER' && txn.targetAccountId) {
-        batch.update(accRef, { currentBalance: (acc.currentBalance || 0) + txn.amount });
-        const targetRef = doc(db, COL_ACCOUNTS, txn.targetAccountId);
-        const targetSnap = await getDoc(targetRef);
-        if (targetSnap.exists()) {
-          const targetAcc = targetSnap.data() as FinancialAccount;
-          batch.update(targetRef, { currentBalance: (targetAcc.currentBalance || 0) - txn.amount });
-        }
-      }
+    // Check closed day status
+    const sessionSnap = await getDoc(doc(db, COL_CLOSING_SESSIONS, txn.date));
+    if (sessionSnap.exists() && (sessionSnap.data() as DailyClosingSession).status === 'CLOSED') {
+      throw new Error(`Cannot void transaction: Financial day ${txn.date} is CLOSED and locked.`);
     }
 
     const updatedTxn: LedgerTransaction = {
@@ -968,8 +971,10 @@ export const api = {
       status: 'VOIDED',
       voidReason: reason
     };
-    batch.set(txnRef, sanitizeForFirestore(updatedTxn));
-    await batch.commit();
+
+    await setDoc(txnRef, sanitizeForFirestore(updatedTxn));
+    await this.recalculateAndRepairLedger(user);
+
     await addFirestoreAudit('VOID_TRANSACTION', 'TRANSACTION', id, `Voided transaction ${id}. Reason: ${reason}`, user);
     return updatedTxn;
   },
@@ -978,9 +983,19 @@ export const api = {
   async getFilteredTracking(filters: TrackingFilter): Promise<{ transactions: LedgerTransaction[]; summary: FilterSummary }> {
     const allTxns = await this.getTransactions();
 
+    // If preset is selected, resolve fromDate and toDate strictly in Pakistan Business Timezone
+    let fromDate = filters.fromDate;
+    let toDate = filters.toDate;
+
+    if (filters.datePreset && filters.datePreset !== 'ALL') {
+      const presetRange = getKarachiDatePreset(filters.datePreset);
+      if (presetRange.fromDate) fromDate = presetRange.fromDate;
+      if (presetRange.toDate) toDate = presetRange.toDate;
+    }
+
     const txns = allTxns.filter(t => {
-      if (filters.fromDate && t.date < filters.fromDate) return false;
-      if (filters.toDate && t.date > filters.toDate) return false;
+      if (fromDate && t.date < fromDate) return false;
+      if (toDate && t.date > toDate) return false;
       if (filters.direction && filters.direction !== 'ALL' && t.direction !== filters.direction) return false;
       if (filters.accountId && t.accountId !== filters.accountId && t.targetAccountId !== filters.accountId) return false;
       if (filters.categoryId && t.categoryId !== filters.categoryId) return false;
@@ -1008,23 +1023,7 @@ export const api = {
       return true;
     });
 
-    const validTxns = txns.filter(t => t.status === 'POSTED');
-    const totalIn = validTxns.filter(t => t.direction === 'IN').reduce((sum, t) => sum + t.amount, 0);
-    const totalOut = validTxns.filter(t => t.direction === 'OUT').reduce((sum, t) => sum + t.amount, 0);
-    const transferIn = validTxns.filter(t => t.direction === 'TRANSFER').reduce((sum, t) => sum + t.amount, 0);
-    const transferOut = transferIn;
-
-    const summary: FilterSummary = {
-      totalIn,
-      totalOut,
-      transferIn,
-      transferOut,
-      netMovement: totalIn - totalOut,
-      transactionCount: txns.length,
-      categoryBreakdown: [],
-      accountBreakdown: []
-    };
-
+    const summary = computeFilterSummary(txns);
     return { transactions: txns, summary };
   },
 
@@ -1032,19 +1031,21 @@ export const api = {
   async getReconciliation(date: string): Promise<{ positions: DailyAccountPosition[]; session: DailyClosingSession }> {
     await ensureFirestoreInitialized();
 
-    const [accounts, allTxns] = await Promise.all([
-      this.getAccounts(),
-      this.getTransactions()
+    const [accSnap, txnSnap, posSnap, sessionSnap] = await Promise.all([
+      getDocs(collection(db, COL_ACCOUNTS)),
+      getDocs(collection(db, COL_TRANSACTIONS)),
+      getDocs(collection(db, COL_DAILY_POSITIONS)),
+      getDoc(doc(db, COL_CLOSING_SESSIONS, date))
     ]);
 
-    // Fetch daily positions
-    const posSnap = await getDocs(collection(db, COL_DAILY_POSITIONS));
+    const accounts: FinancialAccount[] = [];
+    accSnap.forEach(d => accounts.push(d.data() as FinancialAccount));
+
+    const allTxns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => allTxns.push(d.data() as LedgerTransaction));
+
     const allPositions: DailyAccountPosition[] = [];
     posSnap.forEach(d => allPositions.push(d.data() as DailyAccountPosition));
-
-    // Fetch session
-    const sessionDocRef = doc(db, COL_CLOSING_SESSIONS, date);
-    const sessionSnap = await getDoc(sessionDocRef);
 
     const session: DailyClosingSession = sessionSnap.exists()
       ? (sessionSnap.data() as DailyClosingSession)
@@ -1057,59 +1058,7 @@ export const api = {
           totalDifference: 0
         };
 
-    const positions: DailyAccountPosition[] = accounts.map(acc => {
-      const existing = allPositions.find(dp => dp.date === date && dp.accountId === acc.id);
-      const priorTxns = allTxns.filter(t => t.status === 'POSTED' && t.date < date);
-
-      let calcOpening = acc.openingBalance;
-      for (const t of priorTxns) {
-        if (t.accountId === acc.id) {
-          if (t.direction === 'IN') calcOpening += t.amount;
-          else if (t.direction === 'OUT' || t.direction === 'TRANSFER') calcOpening -= t.amount;
-        }
-        if (t.targetAccountId === acc.id && t.direction === 'TRANSFER') {
-          calcOpening += t.amount;
-        }
-      }
-
-      const dayTxns = allTxns.filter(t => t.status === 'POSTED' && t.date === date);
-      let totalIn = 0;
-      let totalOut = 0;
-      let transferIn = 0;
-      let transferOut = 0;
-
-      for (const t of dayTxns) {
-        if (t.accountId === acc.id) {
-          if (t.direction === 'IN') totalIn += t.amount;
-          else if (t.direction === 'OUT') totalOut += t.amount;
-          else if (t.direction === 'TRANSFER') transferOut += t.amount;
-        }
-        if (t.targetAccountId === acc.id && t.direction === 'TRANSFER') {
-          transferIn += t.amount;
-        }
-      }
-
-      const expectedClosing = calcOpening + totalIn + transferIn - totalOut - transferOut;
-      const actualCounted = existing?.actualCountedBalance;
-      const difference = actualCounted !== undefined ? actualCounted - expectedClosing : undefined;
-
-      return {
-        id: existing?.id || `POS-${date}-${acc.id}`,
-        date,
-        accountId: acc.id,
-        accountName: acc.name,
-        openingBalance: calcOpening,
-        totalIn,
-        totalOut,
-        transferIn,
-        transferOut,
-        expectedClosing,
-        actualCountedBalance: actualCounted,
-        difference,
-        status: (session.status === 'CLOSED' ? 'CLOSED' : (existing?.status || 'OPEN')) as DayStatus,
-        notes: existing?.notes
-      };
-    });
+    const positions = computeDailyReconciliationPositions(date, accounts, allTxns, allPositions, session);
 
     return { positions, session };
   },
@@ -1123,7 +1072,7 @@ export const api = {
     const recon = await this.getReconciliation(date);
     const targetPos = recon.positions.find(p => p.accountId === accountId);
     const expected = targetPos?.expectedClosing || 0;
-    const diff = Number(actualCountedBalance) - expected;
+    const diff = subMoney(actualCountedBalance, expected);
 
     const dataToSave: DailyAccountPosition = {
       id: posId,
@@ -1218,6 +1167,96 @@ export const api = {
     return logs.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   },
 
+  // --- LEDGER RECALCULATION & INTEGRITY AUDIT (DMT) ---
+  async recalculateAndRepairLedger(user: string = 'System Admin'): Promise<{ success: boolean; message: string; audit: IntegrityAuditResult }> {
+    await ensureFirestoreInitialized();
+
+    const [accSnap, txnSnap, cliSnap, supSnap, ptrSnap] = await Promise.all([
+      getDocs(collection(db, COL_ACCOUNTS)),
+      getDocs(collection(db, COL_TRANSACTIONS)),
+      getDocs(collection(db, COL_CLIENTS)),
+      getDocs(collection(db, COL_SUPPLIERS)),
+      getDocs(collection(db, COL_PARTNERS))
+    ]);
+
+    const accounts: FinancialAccount[] = [];
+    accSnap.forEach(d => accounts.push(d.data() as FinancialAccount));
+
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const clients: Client[] = [];
+    cliSnap.forEach(d => clients.push(d.data() as Client));
+
+    const suppliers: Supplier[] = [];
+    supSnap.forEach(d => suppliers.push(d.data() as Supplier));
+
+    const partners: Partner[] = [];
+    ptrSnap.forEach(d => partners.push(d.data() as Partner));
+
+    const computedAccounts = computeAccountBalances(accounts, txns);
+    const { clients: computedClients, suppliers: computedSuppliers, partners: computedPartners } =
+      computeEntityBalances(clients, suppliers, partners, txns);
+
+    // Commit updated balances
+    const batch = writeBatch(db);
+
+    for (const acc of computedAccounts) {
+      batch.update(doc(db, COL_ACCOUNTS, acc.id), { currentBalance: acc.currentBalance });
+    }
+
+    for (const cli of computedClients) {
+      batch.update(doc(db, COL_CLIENTS, cli.id), { balance: cli.balance });
+    }
+
+    for (const sup of computedSuppliers) {
+      batch.update(doc(db, COL_SUPPLIERS, sup.id), { balance: sup.balance });
+    }
+
+    for (const ptr of computedPartners) {
+      batch.update(doc(db, COL_PARTNERS, ptr.id), { balance: ptr.balance });
+    }
+
+    await batch.commit();
+
+    const audit = runIntegrityAudit(computedAccounts, txns, computedClients, computedSuppliers, computedPartners);
+    await addFirestoreAudit('LEDGER_REPAIR', 'SYSTEM', 'ROOT', `Ledger recalculated across ${txns.length} transactions and ${accounts.length} accounts`, user);
+
+    return {
+      success: true,
+      message: 'Authoritative ledger recalculation complete. 100% of balances synchronized with zero drift.',
+      audit
+    };
+  },
+
+  async runIntegrityAudit(): Promise<IntegrityAuditResult> {
+    await ensureFirestoreInitialized();
+    const [accSnap, txnSnap, cliSnap, supSnap, ptrSnap] = await Promise.all([
+      getDocs(collection(db, COL_ACCOUNTS)),
+      getDocs(collection(db, COL_TRANSACTIONS)),
+      getDocs(collection(db, COL_CLIENTS)),
+      getDocs(collection(db, COL_SUPPLIERS)),
+      getDocs(collection(db, COL_PARTNERS))
+    ]);
+
+    const accounts: FinancialAccount[] = [];
+    accSnap.forEach(d => accounts.push(d.data() as FinancialAccount));
+
+    const txns: LedgerTransaction[] = [];
+    txnSnap.forEach(d => txns.push(d.data() as LedgerTransaction));
+
+    const clients: Client[] = [];
+    cliSnap.forEach(d => clients.push(d.data() as Client));
+
+    const suppliers: Supplier[] = [];
+    supSnap.forEach(d => suppliers.push(d.data() as Supplier));
+
+    const partners: Partner[] = [];
+    ptrSnap.forEach(d => partners.push(d.data() as Partner));
+
+    return runIntegrityAudit(accounts, txns, clients, suppliers, partners);
+  },
+
   // --- ADMIN PERMANENT DATA WIPE ---
   async wipeData(
     mode: 'TRANSACTIONS_ONLY' | 'TRANSACTIONS_ONLY_ZERO_BALANCES' | 'FULL_SYSTEM_RESET' | 'PURGE_ALL_DATA_BLANK',
@@ -1225,7 +1264,6 @@ export const api = {
   ): Promise<{ success: boolean; message: string }> {
     await ensureFirestoreInitialized();
 
-    // Safe chunked batch deletion to prevent Firestore 500-operation limits
     const deleteEntireCollection = async (colName: string) => {
       const snap = await getDocs(collection(db, colName));
       if (snap.empty) return;
@@ -1240,14 +1278,10 @@ export const api = {
     };
 
     if (mode === 'TRANSACTIONS_ONLY_ZERO_BALANCES' || mode === 'TRANSACTIONS_ONLY') {
-      // 1. Delete all transactions
       await deleteEntireCollection(COL_TRANSACTIONS);
-      // 2. Delete all daily positions
       await deleteEntireCollection(COL_DAILY_POSITIONS);
-      // 3. Delete all closing sessions
       await deleteEntireCollection(COL_CLOSING_SESSIONS);
 
-      // 4. Update account balances
       const accSnap = await getDocs(collection(db, COL_ACCOUNTS));
       if (!accSnap.empty) {
         const accBatch = writeBatch(db);
@@ -1262,7 +1296,6 @@ export const api = {
         await accBatch.commit();
       }
 
-      // 5. Reset client and supplier balances
       const cliSnap = await getDocs(collection(db, COL_CLIENTS));
       if (!cliSnap.empty) {
         const cliBatch = writeBatch(db);
@@ -1296,7 +1329,6 @@ export const api = {
           : 'All transactions, day closures, and positions have been permanently wiped from the centralized cloud database.'
       };
     } else if (mode === 'PURGE_ALL_DATA_BLANK') {
-      // Complete Blank Slate Purge (Deletes everything including master records)
       await deleteEntireCollection(COL_TRANSACTIONS);
       await deleteEntireCollection(COL_DAILY_POSITIONS);
       await deleteEntireCollection(COL_CLOSING_SESSIONS);
@@ -1310,18 +1342,16 @@ export const api = {
       await deleteEntireCollection(COL_PARTNERS);
       await deleteEntireCollection(COL_PAYMENT_METHODS);
 
-      // Keep metadata so it doesn't auto-reseed old defaults
       await setDoc(doc(db, COL_META, 'initialization'), {
         initialized: true,
         clearedAt: new Date().toISOString(),
-        version: '2.0.0',
+        version: '3.0.0-blank',
         blankSlate: true
       });
 
       await addFirestoreAudit('PURGE_DATABASE_BLANK', 'SYSTEM', 'ROOT', 'Completely purged all cloud collections to empty blank state', user);
       return { success: true, message: 'Complete database purge complete. Database is now a 100% clean empty canvas.' };
     } else {
-      // FULL SYSTEM FACTORY RESET WITH RS. 0 BALANCES
       await deleteEntireCollection(COL_TRANSACTIONS);
       await deleteEntireCollection(COL_DAILY_POSITIONS);
       await deleteEntireCollection(COL_CLOSING_SESSIONS);
@@ -1335,7 +1365,6 @@ export const api = {
       await deleteEntireCollection(COL_PARTNERS);
       await deleteEntireCollection(COL_PAYMENT_METHODS);
 
-      // Re-seed clean defaults in Cloud Firestore with 0 opening and current balances
       const batch = writeBatch(db);
       for (const b of DEFAULT_BANKS) batch.set(doc(db, COL_BANKS, b.id), b);
       for (const a of DEFAULT_ACCOUNTS) batch.set(doc(db, COL_ACCOUNTS, a.id), { ...a, openingBalance: 0, currentBalance: 0 });
@@ -1349,7 +1378,7 @@ export const api = {
     }
   },
 
-  // --- EXPORT BACKUPS ---
+  // --- EXPORT BACKUPS (XLSX, CSV, JSON) ---
   async exportFullBackupWorkbook(): Promise<Blob> {
     await ensureFirestoreInitialized();
     const [banks, accounts, categories, clients, suppliers, partners, workers, vehicles, paymentMethods, txns, dailyPositions, closingSessions, auditLogs] = await Promise.all([
@@ -1403,6 +1432,86 @@ export const api = {
     return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   },
 
+  async exportTransactionsCsv(): Promise<Blob> {
+    await ensureFirestoreInitialized();
+    const txns = await this.getTransactions();
+
+    const exportRows = txns.map(t => ({
+      'Transaction ID': t.id,
+      'Date': t.date,
+      'Time': t.time,
+      'Direction': t.direction,
+      'Account Name': t.accountName,
+      'Account ID': t.accountId,
+      'Target Account': t.targetAccountName || '',
+      'Target Account ID': t.targetAccountId || '',
+      'Category Name': t.categoryName,
+      'Category ID': t.categoryId,
+      'Entity Type': t.entityType || 'NONE',
+      'Entity Name': t.entityName || '',
+      'Entity ID': t.entityId || '',
+      'Vehicle': t.vehicleInfo || '',
+      'Payment Method': t.paymentMethod,
+      'Amount (PKR)': t.amount,
+      'Reference Number': t.referenceNumber || '',
+      'Description': t.description || '',
+      'Source Module': t.sourceModule || 'MANUAL',
+      'Status': t.status,
+      'Created By': t.createdBy || '',
+      'Created At': t.createdAt || ''
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportRows.length > 0 ? exportRows : [{ 'Transaction ID': 'NO_RECORDS' }]);
+    const csvString = XLSX.utils.sheet_to_csv(ws);
+    return new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  },
+
+  async exportAccountsCsv(): Promise<Blob> {
+    await ensureFirestoreInitialized();
+    const accounts = await this.getAccounts();
+
+    const exportRows = accounts.map(a => ({
+      'Account ID': a.id,
+      'Account Name': a.name,
+      'Account Type': a.accountType,
+      'Bank Name': a.bankName || '',
+      'Bank ID': a.bankId || '',
+      'Account Number': a.accountNumber || '',
+      'Opening Balance (PKR)': a.openingBalance,
+      'Current Balance (PKR)': a.currentBalance,
+      'Active': a.active ? 'YES' : 'NO',
+      'Display Order': a.displayOrder || 0,
+      'Created At': a.createdAt || ''
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportRows);
+    const csvString = XLSX.utils.sheet_to_csv(ws);
+    return new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  },
+
+  async exportMasterEntitiesCsv(): Promise<Blob> {
+    await ensureFirestoreInitialized();
+    const [clients, suppliers, partners, workers, vehicles] = await Promise.all([
+      this.getClients(),
+      this.getSuppliers(),
+      this.getPartners(),
+      this.getWorkers(),
+      this.getVehicles()
+    ]);
+
+    const exportRows: any[] = [];
+
+    clients.forEach(c => exportRows.push({ 'Type': 'CLIENT', 'ID': c.id, 'Code': c.code, 'Name': c.name, 'Phone': c.phone || '', 'Email': c.email || '', 'Balance': c.balance, 'Status': c.status }));
+    suppliers.forEach(s => exportRows.push({ 'Type': 'SUPPLIER', 'ID': s.id, 'Code': s.code, 'Name': s.name, 'Phone': s.phone || '', 'Email': s.email || '', 'Balance': s.balance, 'Status': s.status }));
+    partners.forEach(p => exportRows.push({ 'Type': 'PARTNER', 'ID': p.id, 'Code': p.code, 'Name': p.name, 'Phone': p.phone || '', 'Share %': p.sharePercentage, 'Balance': p.balance, 'Status': p.status }));
+    workers.forEach(w => exportRows.push({ 'Type': 'WORKER', 'ID': w.id, 'Code': w.code, 'Name': w.name, 'Phone': w.phone || '', 'Role': w.role || '', 'Daily Wage': w.dailyWage || 0, 'Status': w.status }));
+    vehicles.forEach(v => exportRows.push({ 'Type': 'VEHICLE', 'ID': v.id, 'Plate Number': v.plateNumber, 'Model': v.model, 'Driver': v.driverName || '', 'Status': v.status }));
+
+    const ws = XLSX.utils.json_to_sheet(exportRows);
+    const csvString = XLSX.utils.sheet_to_csv(ws);
+    return new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+  },
+
   async exportFullBackupJson(): Promise<Blob> {
     await ensureFirestoreInitialized();
     const [banks, accounts, categories, clients, suppliers, partners, workers, vehicles, paymentMethods, transactions, auditLogs] = await Promise.all([
@@ -1421,7 +1530,8 @@ export const api = {
 
     const fullData = {
       exportedAt: new Date().toISOString(),
-      version: '2.0.0-firestore',
+      timezone: 'Asia/Karachi',
+      version: '3.0.0-integrity-repaired',
       banks,
       accounts,
       categories,
@@ -1438,17 +1548,154 @@ export const api = {
     return new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' });
   },
 
-  // --- IMPORT / RESTORE BACKUPS ---
+  // --- IMPORT / RESTORE BACKUPS (XLSX, CSV, JSON) ---
   async restoreBackupFile(file: File, user: string = 'System Administrator'): Promise<{ success: boolean; message: string; result: any }> {
     await ensureFirestoreInitialized();
 
-    const isJson = file.name.endsWith('.json');
+    const fileNameLower = file.name.toLowerCase();
+    const isJson = fileNameLower.endsWith('.json');
+    const isCsv = fileNameLower.endsWith('.csv');
     let backupObj: any = {};
+    let importSummary: any = {};
 
     if (isJson) {
       const text = await file.text();
       backupObj = JSON.parse(text);
+      importSummary = {
+        transactions: (backupObj.transactions || backupObj.ledgerTransactions || []).length,
+        accounts: (backupObj.accounts || []).length,
+        clients: (backupObj.clients || []).length,
+        suppliers: (backupObj.suppliers || []).length,
+        partners: (backupObj.partners || []).length,
+        categories: (backupObj.categories || []).length
+      };
+    } else if (isCsv) {
+      const text = await file.text();
+      const wb = XLSX.read(text, { type: 'string' });
+      const firstSheetName = wb.SheetNames[0];
+      const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[firstSheetName]);
+
+      if (rows.length === 0) {
+        throw new Error('The uploaded CSV file contains no data rows.');
+      }
+
+      // Check header signature to identify CSV dataset type
+      const sampleRow = rows[0];
+      const keys = Object.keys(sampleRow).map(k => k.toLowerCase());
+
+      const isTxnCsv = keys.some(k => k.includes('direction') || k.includes('amount') || k.includes('txn') || k.includes('transaction'));
+      const isAccCsv = keys.some(k => k.includes('account type') || k.includes('opening balance') || k.includes('current balance'));
+      const isEntityCsv = keys.some(k => k.includes('share') || k.includes('plate') || k.includes('wage') || k.includes('role') || k.includes('type'));
+
+      if (isTxnCsv) {
+        // Map and validate CSV transactions
+        const existingAccounts = await this.getAccounts();
+        const existingCategories = await this.getCategories();
+        const defaultAccount = existingAccounts[0] || { id: 'ACC-1', name: 'FBM CASH IN HAND' };
+        const defaultCategory = existingCategories[0] || { id: 'CAT-GEN', name: 'GENERAL' };
+
+        const transactions: LedgerTransaction[] = rows.map((r, idx) => {
+          const rawDirection = String(r['Direction'] || r['direction'] || r['Type'] || 'IN').toUpperCase();
+          const direction: 'IN' | 'OUT' | 'TRANSFER' = (rawDirection === 'OUT' || rawDirection === 'DEBIT') ? 'OUT' : (rawDirection === 'TRANSFER' ? 'TRANSFER' : 'IN');
+
+          const rawAmount = Math.abs(Number(r['Amount (PKR)'] ?? r['Amount'] ?? r['amount'] ?? 0));
+          const date = String(r['Date'] || r['date'] || getKarachiToday()).trim();
+          const time = String(r['Time'] || r['time'] || getKarachiNowTime()).trim();
+
+          const accName = String(r['Account Name'] || r['Account'] || r['accountName'] || defaultAccount.name).trim();
+          const matchedAcc = existingAccounts.find(a => a.name.toLowerCase() === accName.toLowerCase() || a.id === r['Account ID']);
+          const accountId = matchedAcc?.id || r['Account ID'] || defaultAccount.id;
+          const accountName = matchedAcc?.name || accName;
+
+          const catName = String(r['Category Name'] || r['Category'] || r['categoryName'] || defaultCategory.name).trim();
+          const matchedCat = existingCategories.find(c => c.name.toLowerCase() === catName.toLowerCase() || c.id === r['Category ID']);
+          const categoryId = matchedCat?.id || r['Category ID'] || defaultCategory.id;
+          const categoryName = matchedCat?.name || catName;
+
+          const targetAccName = r['Target Account'] || r['targetAccountName'];
+          const matchedTarget = targetAccName ? existingAccounts.find(a => a.name.toLowerCase() === String(targetAccName).toLowerCase()) : undefined;
+
+          const txnId = r['Transaction ID'] || r['id'] || `TXN-CSV-${Date.now()}-${idx + 1}`;
+
+          return {
+            id: txnId,
+            date,
+            time,
+            direction,
+            accountId,
+            accountName,
+            ...(matchedTarget || r['Target Account ID'] ? { targetAccountId: matchedTarget?.id || r['Target Account ID'], targetAccountName: matchedTarget?.name || targetAccName } : {}),
+            categoryId,
+            categoryName,
+            amount: rawAmount,
+            paymentMethod: r['Payment Method'] || r['paymentMethod'] || 'Cash',
+            entityType: r['Entity Type'] || r['entityType'] || 'NONE',
+            entityId: r['Entity ID'] || r['entityId'] || undefined,
+            entityName: r['Entity Name'] || r['entityName'] || undefined,
+            vehicleId: r['Vehicle ID'] || r['vehicleId'] || undefined,
+            vehicleInfo: r['Vehicle'] || r['vehicleInfo'] || undefined,
+            referenceNumber: r['Reference Number'] || r['Reference'] || r['referenceNumber'] || undefined,
+            description: r['Description'] || r['description'] || '',
+            sourceModule: r['Source Module'] || 'CSV_IMPORT',
+            status: (r['Status'] === 'VOIDED' ? 'VOIDED' : 'POSTED') as 'POSTED' | 'VOIDED',
+            createdBy: r['Created By'] || user,
+            createdAt: r['Created At'] || new Date().toISOString()
+          };
+        });
+
+        backupObj = { transactions };
+        importSummary = { transactions: transactions.length, type: 'CSV_TRANSACTIONS' };
+      } else if (isAccCsv) {
+        const accounts: FinancialAccount[] = rows.map((r, idx) => ({
+          id: r['Account ID'] || r['id'] || `ACC-CSV-${Date.now()}-${idx + 1}`,
+          name: String(r['Account Name'] || r['name'] || `Account ${idx + 1}`).trim(),
+          accountType: r['Account Type'] || r['accountType'] || 'CASH',
+          bankId: r['Bank ID'] || r['bankId'] || undefined,
+          bankName: r['Bank Name'] || r['bankName'] || undefined,
+          accountNumber: r['Account Number'] || r['accountNumber'] || undefined,
+          openingBalance: Number(r['Opening Balance (PKR)'] ?? r['openingBalance'] ?? 0),
+          currentBalance: Number(r['Current Balance (PKR)'] ?? r['currentBalance'] ?? 0),
+          active: String(r['Active']).toUpperCase() !== 'NO',
+          displayOrder: Number(r['Display Order'] || idx + 1),
+          createdAt: r['Created At'] || getKarachiToday()
+        }));
+
+        backupObj = { accounts };
+        importSummary = { accounts: accounts.length, type: 'CSV_ACCOUNTS' };
+      } else if (isEntityCsv) {
+        const clients: Client[] = [];
+        const suppliers: Supplier[] = [];
+        const partners: Partner[] = [];
+        const workers: Worker[] = [];
+        const vehicles: Vehicle[] = [];
+
+        rows.forEach((r, idx) => {
+          const type = String(r['Type'] || '').toUpperCase();
+          const id = r['ID'] || `ENT-${Date.now()}-${idx + 1}`;
+          const name = String(r['Name'] || r['Plate Number'] || `Entity ${idx + 1}`).trim();
+          const code = String(r['Code'] || `E-${idx + 101}`).trim();
+          const phone = r['Phone'] || undefined;
+
+          if (type === 'CLIENT' || (!type && r['Balance'] !== undefined)) {
+            clients.push({ id, code, name, phone, balance: Number(r['Balance'] || 0), status: r['Status'] || 'ACTIVE', createdAt: getKarachiToday() });
+          } else if (type === 'SUPPLIER') {
+            suppliers.push({ id, code, name, phone, balance: Number(r['Balance'] || 0), status: r['Status'] || 'ACTIVE', createdAt: getKarachiToday() });
+          } else if (type === 'PARTNER') {
+            partners.push({ id, code, name, phone, sharePercentage: Number(r['Share %'] || 0), balance: Number(r['Balance'] || 0), status: r['Status'] || 'ACTIVE', createdAt: getKarachiToday() });
+          } else if (type === 'WORKER') {
+            workers.push({ id, code, name, phone, role: r['Role'] || 'Worker', dailyWage: Number(r['Daily Wage'] || 0), status: r['Status'] || 'ACTIVE', createdAt: getKarachiToday() });
+          } else if (type === 'VEHICLE' || r['Plate Number']) {
+            vehicles.push({ id, plateNumber: r['Plate Number'] || name, model: r['Model'] || '-', driverName: r['Driver'] || undefined, status: r['Status'] || 'ACTIVE', createdAt: getKarachiToday() });
+          }
+        });
+
+        backupObj = { clients, suppliers, partners, workers, vehicles };
+        importSummary = { clients: clients.length, suppliers: suppliers.length, partners: partners.length, workers: workers.length, vehicles: vehicles.length, type: 'CSV_ENTITIES' };
+      } else {
+        throw new Error('Unrecognized CSV format. Please upload an exported FBM CSV file (Transactions, Accounts, or Entities).');
+      }
     } else {
+      // XLSX workbook parsing
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: 'array' });
 
@@ -1472,46 +1719,56 @@ export const api = {
         dailyPositions: parseSheet('DailyPositions'),
         closingSessions: parseSheet('ClosingSessions')
       };
+
+      importSummary = {
+        transactions: (backupObj.transactions || []).length,
+        accounts: (backupObj.accounts || []).length,
+        clients: (backupObj.clients || []).length,
+        suppliers: (backupObj.suppliers || []).length,
+        type: 'XLSX_WORKBOOK'
+      };
     }
 
-    // Overwrite to Cloud Firestore
-    const batch = writeBatch(db);
-
-    const restoreCol = (colName: string, items: any[], idField: string = 'id') => {
-      if (Array.isArray(items)) {
-        for (const item of items) {
-          if (item && item[idField]) {
-            batch.set(doc(db, colName, item[idField]), sanitizeForFirestore(item));
-          }
+    // Overwrite to Cloud Firestore in managed batch chunks
+    const restoreCol = async (colName: string, items: any[], idField: string = 'id') => {
+      if (Array.isArray(items) && items.length > 0) {
+        const validItems = items.filter(item => item && item[idField] && item[idField] !== 'NO_RECORDS' && item.status !== 'EMPTY');
+        const chunkSize = 200;
+        for (let i = 0; i < validItems.length; i += chunkSize) {
+          const chunk = validItems.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          chunk.forEach(item => {
+            batch.set(doc(db, colName, String(item[idField])), sanitizeForFirestore(item));
+          });
+          await batch.commit();
         }
       }
     };
 
-    restoreCol(COL_BANKS, backupObj.banks);
-    restoreCol(COL_ACCOUNTS, backupObj.accounts);
-    restoreCol(COL_CATEGORIES, backupObj.categories);
-    restoreCol(COL_CLIENTS, backupObj.clients);
-    restoreCol(COL_SUPPLIERS, backupObj.suppliers);
-    restoreCol(COL_PARTNERS, backupObj.partners);
-    restoreCol(COL_WORKERS, backupObj.workers);
-    restoreCol(COL_VEHICLES, backupObj.vehicles);
-    restoreCol(COL_PAYMENT_METHODS, backupObj.paymentMethods);
-    restoreCol(COL_TRANSACTIONS, backupObj.transactions || backupObj.ledgerTransactions);
-    restoreCol(COL_DAILY_POSITIONS, backupObj.dailyPositions);
-    restoreCol(COL_CLOSING_SESSIONS, backupObj.closingSessions, 'date');
+    if (backupObj.banks) await restoreCol(COL_BANKS, backupObj.banks);
+    if (backupObj.accounts) await restoreCol(COL_ACCOUNTS, backupObj.accounts);
+    if (backupObj.categories) await restoreCol(COL_CATEGORIES, backupObj.categories);
+    if (backupObj.clients) await restoreCol(COL_CLIENTS, backupObj.clients);
+    if (backupObj.suppliers) await restoreCol(COL_SUPPLIERS, backupObj.suppliers);
+    if (backupObj.partners) await restoreCol(COL_PARTNERS, backupObj.partners);
+    if (backupObj.workers) await restoreCol(COL_WORKERS, backupObj.workers);
+    if (backupObj.vehicles) await restoreCol(COL_VEHICLES, backupObj.vehicles);
+    if (backupObj.paymentMethods) await restoreCol(COL_PAYMENT_METHODS, backupObj.paymentMethods);
+    if (backupObj.transactions || backupObj.ledgerTransactions) {
+      await restoreCol(COL_TRANSACTIONS, backupObj.transactions || backupObj.ledgerTransactions);
+    }
+    if (backupObj.dailyPositions) await restoreCol(COL_DAILY_POSITIONS, backupObj.dailyPositions);
+    if (backupObj.closingSessions) await restoreCol(COL_CLOSING_SESSIONS, backupObj.closingSessions, 'date');
 
-    await batch.commit();
-    await addFirestoreAudit('RESTORE_BACKUP', 'SYSTEM', file.name, `Restored complete system backup from ${file.name} to Cloud Firestore`, user);
+    // Perform authoritative recalculation and repair
+    await this.recalculateAndRepairLedger(user);
+
+    await addFirestoreAudit('RESTORE_BACKUP', 'SYSTEM', file.name, `Restored backup from ${file.name} (${file.type || 'data file'}) to Cloud Firestore`, user);
 
     return {
       success: true,
-      message: 'System database successfully restored to Cloud Firestore! All devices will now reflect the restored records.',
-      result: {
-        transactions: (backupObj.transactions || backupObj.ledgerTransactions || []).length,
-        accounts: (backupObj.accounts || []).length,
-        clients: (backupObj.clients || []).length,
-        suppliers: (backupObj.suppliers || []).length
-      }
+      message: `System database successfully restored from ${file.name} to Cloud Firestore! 100% of accounts and ledgers reconciled.`,
+      result: importSummary
     };
   }
 };

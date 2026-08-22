@@ -29,6 +29,7 @@ import {
 import { SearchableCombobox, ComboboxItem } from './SearchableCombobox';
 import { QuickAddModal, QuickAddType } from './QuickAddModal';
 import { api } from '../services/apiClient';
+import { getKarachiToday, getKarachiNowTime } from '../utils/dateTime';
 
 interface TransactionFormProps {
   accounts: FinancialAccount[];
@@ -57,8 +58,8 @@ export const TransactionForm: React.FC<TransactionFormProps> = ({
   onSuccess,
   onRefreshData
 }) => {
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const nowTime = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  const todayStr = getKarachiToday();
+  const nowTime = getKarachiNowTime();
 
   const [direction, setDirection] = useState<TransactionDirection>('IN');
   const [date, setDate] = useState(todayStr);
