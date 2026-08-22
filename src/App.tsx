@@ -23,9 +23,10 @@ import { MasterDataView } from './components/MasterDataView';
 import { AuditLogView } from './components/AuditLogView';
 import { SettingsView } from './components/SettingsView';
 import { api } from './services/apiClient';
+import { getKarachiToday } from './utils/dateTime';
 
 export default function App() {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getKarachiToday();
 
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
 

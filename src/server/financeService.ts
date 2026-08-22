@@ -19,6 +19,7 @@ import {
   DayStatus,
   SourceModule
 } from '../types';
+import { getKarachiToday, getKarachiNowTime } from '../utils/dateTime';
 
 export class FinanceService {
   // --- HELPER METHOD FOR BALANCE REVERSAL ---
@@ -452,6 +453,24 @@ export class FinanceService {
     attachmentUrl?: string;
     createdBy: string;
   }): LedgerTransaction {
+    // 0. Input Validation
+    const amount = Number(data.amount);
+    if (!isFinite(amount) || amount <= 0) {
+      throw new Error('Transaction amount must be a positive finite number greater than zero.');
+    }
+    if (!data.date || !/^\d{4}-\d{2}-\d{2}$/.test(data.date)) {
+      throw new Error('Transaction date must be in YYYY-MM-DD format.');
+    }
+    if (!data.accountId) {
+      throw new Error('Source account is required.');
+    }
+    if (!data.categoryId) {
+      throw new Error('Transaction category is required.');
+    }
+    if (!data.direction || !['IN', 'OUT', 'TRANSFER'].includes(data.direction)) {
+      throw new Error('Transaction direction must be IN, OUT, or TRANSFER.');
+    }
+
     // 1. Check Day Closure Protection
     const isClosed = db.closingSessions.some(s => s.date === data.date && s.status === 'CLOSED');
     if (isClosed) {
@@ -502,7 +521,7 @@ export class FinanceService {
       if (v) vehicleInfo = `${v.plateNumber} (${v.model})`;
     }
 
-    const txnId = `TXN-${(db.ledgerTransactions.length + 10001).toString()}`;
+    const txnId = `TXN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
     const newTxn: LedgerTransaction = {
       id: txnId,
       date: data.date,
@@ -951,19 +970,31 @@ export class FinanceService {
 
   getFilteredTransactions(filters: TrackingFilter): LedgerTransaction[] {
     return db.ledgerTransactions.filter(t => {
-      // 1. Date Filter
+      // 1. Date Filter — uses Asia/Karachi business timezone
       if (filters.datePreset && filters.datePreset !== 'ALL') {
-        const todayStr = new Date().toISOString().slice(0, 10);
-        const today = new Date();
+        const todayStr = getKarachiToday();
 
         if (filters.datePreset === 'TODAY') {
           if (t.date !== todayStr) return false;
         } else if (filters.datePreset === 'YESTERDAY') {
-          const yest = new Date(today);
-          yest.setDate(yest.getDate() - 1);
-          if (t.date !== yest.toISOString().slice(0, 10)) return false;
+          const [y, m, d] = todayStr.split('-').map(Number);
+          const yestDate = new Date(Date.UTC(y, m - 1, d));
+          yestDate.setUTCDate(yestDate.getUTCDate() - 1);
+          const yestStr = `${yestDate.getUTCFullYear()}-${String(yestDate.getUTCMonth() + 1).padStart(2, '0')}-${String(yestDate.getUTCDate()).padStart(2, '0')}`;
+          if (t.date !== yestStr) return false;
         } else if (filters.datePreset === 'THIS_MONTH') {
           if (t.date.slice(0, 7) !== todayStr.slice(0, 7)) return false;
+        } else if (filters.datePreset === 'THIS_WEEK') {
+          const [y, m, d] = todayStr.split('-').map(Number);
+          const todayDate = new Date(Date.UTC(y, m - 1, d));
+          const dayOfWeek = todayDate.getUTCDay();
+          const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+          const monday = new Date(todayDate);
+          monday.setUTCDate(monday.getUTCDate() + diffToMonday);
+          const sunday = new Date(monday);
+          sunday.setUTCDate(sunday.getUTCDate() + 6);
+          const fmt = (dt: Date) => `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+          if (t.date < fmt(monday) || t.date > fmt(sunday)) return false;
         } else if (filters.datePreset === 'CUSTOM') {
           if (filters.fromDate && t.date < filters.fromDate) return false;
           if (filters.toDate && t.date > filters.toDate) return false;
@@ -1140,7 +1171,7 @@ export class FinanceService {
       transferIn,
       transferOut,
       netMovement: totalIn - totalOut,
-      transactionCount: txns.length,
+      transactionCount: txns.filter(t => t.status === 'POSTED').length,
       categoryBreakdown,
       accountBreakdown,
       entitySummary

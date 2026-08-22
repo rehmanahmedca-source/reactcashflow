@@ -123,7 +123,10 @@ export class FinanceDatabase {
         closingSessions: this.closingSessions,
         auditLogs: this.auditLogs
       };
-      fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(dataToSave, null, 2), 'utf-8');
+      // Atomic write: write to temp file first, then rename to prevent corruption
+      const tempPath = DATA_FILE_PATH + '.tmp';
+      fs.writeFileSync(tempPath, JSON.stringify(dataToSave, null, 2), 'utf-8');
+      fs.renameSync(tempPath, DATA_FILE_PATH);
     } catch (err) {
       console.error('Error saving finance database to disk:', err);
     }
